@@ -1,27 +1,33 @@
+import json
 import os
+from pprint import pprint as pp
 
 from dotenv import load_dotenv
-from loguru import logger
 
 from rm_exporter.medusa import get_orders
+from rm_exporter.royal_mail import get_royal_mail_data
 
 load_dotenv()
 
 
 def main():
+    print("Getting orders...\n")
     orders = get_orders(
         os.environ["MEDUSA_BASE_URL"],
         os.environ["MEDUSA_ADMIN_TOKEN"],
     )
 
-    for order in orders:
-        print(
-            order["display_id"],
-            order["payment_status"],
-            order["fulfillment_status"],
-            # order["email"],
-            order["shipping_address"],
-        )
+    pp(orders)
+
+    # rm_data = get_royal_mail_data(
+    #     os.environ["ROYAL_MAIL_BASE_URL"],
+    #     os.environ["ROYAL_MAIL_API_KEY"],
+    # )
+
+    # pp(rm_data)
+
+    # with open("rm_data.json", "w") as json_file:
+    #     json.dump(rm_data, json_file, indent=4)
 
 
 if __name__ == "__main__":
