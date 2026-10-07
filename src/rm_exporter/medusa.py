@@ -2,73 +2,62 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import requests
+
+from rm_exporter.models import MedusaAddress, MedusaItem, MedusaOrder
 
 ORDER_FIELDS = ",".join(  # noqa: FLY002
     [
         "+email",
+        "+item_subtotal",
+        "+shipping_total",
+        "+total",
+        "+items.*",
         "+shipping_address.*",
-        "+shipping_methods.*",
+        "fulfillment_status",
+        "display_id",
+        "created_at",
     ]
 )
 
 
-@dataclass
-class MedusaAddress:
-    first_name: str
-    last_name: str
-    company: str | None
-    address_1: str
-    address_2: str | None
-    city: str
-    province: str | None
-    postal_code: str
-    country_code: str
-    phone: str | None
-
-
-@dataclass
-class MedusaOrder:
-    id: str
-    display_id: int
-    email: str
-    fulfillment_status: str
-    shipping_address: MedusaAddress
-
-
-# @dataclass
-# class MedusaOrder:
-#     email: str
-#     phone: str
-#     recipient: str  # First name and last name
-#     order_reference: str
-
-
-def get_orders(base_url: str, token: str):
+def get_orders(base_url: str, api_key: str) -> list[MedusaOrder]:
     response = requests.get(
         f"{base_url}/admin/orders",
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Basic {api_key}",
         },
         params={
             "fields": ORDER_FIELDS,
         },
+        timeout=30,
     )
     response.raise_for_status()
     orders = response.json()["orders"]
-
     orders_transformed = []
 
     for order in orders:
         address = order["shipping_address"]
 
+        items = [
+            MedusaItem(
+                title=item["title"],
+                variant_title=item.get("variant_title"),
+                sku=item.get("variant_sku"),
+                quantity=item["quantity"],
+                unit_price=item["unit_price"],
+            )
+            for item in order["items"]
+        ]
+
         transformed_order = MedusaOrder(
             id=order["id"],
             display_id=order["display_id"],
+            created_at=order["created_at"],
             email=order["email"],
-            fulfillment_status=order["fulfillment_status"],
+            subtotal=order["item_subtotal"],
+            shipping_total=order["shipping_total"],
+            total=order["total"],
             shipping_address=MedusaAddress(
                 first_name=address["first_name"],
                 last_name=address["last_name"],
@@ -81,6 +70,8 @@ def get_orders(base_url: str, token: str):
                 country_code=address["country_code"],
                 phone=address["phone"],
             ),
+            fulfillment_status=order["fulfillment_status"],
+            items=items,
         )
 
         orders_transformed.append(transformed_order)
