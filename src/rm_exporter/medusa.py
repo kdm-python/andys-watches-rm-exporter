@@ -77,3 +77,57 @@ def get_orders(base_url: str, api_key: str) -> list[MedusaOrder]:
         orders_transformed.append(transformed_order)
 
     return orders_transformed
+
+
+def get_order(base_url: str, api_key: str, order_id: str) -> MedusaOrder:
+    response = requests.get(
+        f"{base_url}/admin/orders/{order_id}",
+        headers={
+            "Authorization": f"Basic {api_key}",
+        },
+        params={
+            "fields": ORDER_FIELDS,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    order = response.json()["order"]
+
+    address = order["shipping_address"]
+
+    items = [
+        MedusaItem(
+            title=item["title"],
+            variant_title=item.get("variant_title"),
+            sku=item.get("variant_sku"),
+            quantity=item["quantity"],
+            unit_price=item["unit_price"],
+        )
+        for item in order["items"]
+    ]
+
+    transformed_order = MedusaOrder(
+        id=order["id"],
+        display_id=order["display_id"],
+        created_at=order["created_at"],
+        email=order["email"],
+        subtotal=order["item_subtotal"],
+        shipping_total=order["shipping_total"],
+        total=order["total"],
+        shipping_address=MedusaAddress(
+            first_name=address["first_name"],
+            last_name=address["last_name"],
+            company=address["company"],
+            address_1=address["address_1"],
+            address_2=address["address_2"],
+            city=address["city"],
+            province=address["province"],
+            postal_code=address["postal_code"],
+            country_code=address["country_code"],
+            phone=address["phone"],
+        ),
+        fulfillment_status=order["fulfillment_status"],
+        items=items,
+    )
+
+    return transformed_order

@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from rm-exporter!")
+"""Royal Mail export integration."""

@@ -11,7 +11,7 @@ class MedusaOrderTests(unittest.TestCase):
     def test_maps_item_subtotal_and_line_items(self, get):
         response = Mock()
         captured_order = json.loads(
-            (Path(__file__).parents[1] / "medusa_orders.json").read_text()
+            (Path(__file__).parent / "fixtures" / "medusa_order.json").read_text()
         )["order"]
         captured_order["email"] = "customer@example.com"
         response.json.return_value = {"orders": [captured_order]}

@@ -16,8 +16,14 @@ dependencies = [
 ]
 
 [project.scripts]
-rm-exporter = "rm_exporter:main"
+rm-exporter = "rm_exporter.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.0.0",
+    "pytest>=8.4.2",
+]
