@@ -6,7 +6,11 @@ from dotenv import load_dotenv
 
 from rm_exporter.medusa import get_orders
 from rm_exporter.models import ROYAL_MAIL_PACKAGE_FORMAT_IDENTIFIERS
-from rm_exporter.royal_mail import create_order, to_payload, transform_order
+from rm_exporter.royal_mail import (
+    send_order_click_and_drop,
+    to_payload,
+    transform_order,
+)
 
 load_dotenv()
 
@@ -16,7 +20,9 @@ TEMPORARY_DRY_RUN_PACKAGE_FORMAT_IDENTIFIER = "smallParcel"
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--post", action="store_true", help="create the Royal Mail order")
+    parser.add_argument(
+        "--post", action="store_true", help="create the Royal Mail order"
+    )
     parser.add_argument("--order", help="Medusa order ID to transform")
     parser.add_argument(
         "--package-weight-in-grams",
@@ -97,7 +103,7 @@ def main():
 
     print(f"\nWARNING: creating Royal Mail order for Medusa order {order.id}...")
 
-    result = create_order(
+    result = send_order_click_and_drop(
         os.environ["ROYAL_MAIL_BASE_URL"],
         os.environ["ROYAL_MAIL_API_KEY"],
         rm_order,

@@ -38,6 +38,16 @@ def test_create_order_rejects_duplicate_medusa_id(temporary_database: Path):
         db.create_order("medusa_1", "AW-1002")
 
 
+def test_update_order_records_and_clears_an_error(temporary_database: Path):
+    db.create_order("medusa_1", "AW-1001")
+
+    assert db.update_order_status("medusa_1", "failed", error="Connection timed out")
+    assert db.select_order("medusa_1")["error"] == "Connection timed out"
+
+    assert db.update_order_status("medusa_1", "sent")
+    assert db.select_order("medusa_1")["error"] is None
+
+
 def test_update_and_delete_order(temporary_database: Path):
     db.create_order("medusa_1", "AW-1001")
 

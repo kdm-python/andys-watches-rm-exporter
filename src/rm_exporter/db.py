@@ -25,6 +25,8 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | None = None) -> None:
     """Create the application tables if they do not already exist."""
 
+    # (DEV) Look at making the ID key unique automatically here
+
     with get_connection(db_path) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS orders (
@@ -74,7 +76,10 @@ def select_order(
 
 
 def update_order_status(
-    medusa_order_id: str, status: str, db_path: Path | None = None
+    medusa_order_id: str,
+    status: str,
+    error: str | None = None,
+    db_path: Path | None = None,
 ) -> bool:
     with get_connection(db_path) as conn:
         cursor = conn.execute(
@@ -82,10 +87,11 @@ def update_order_status(
             UPDATE orders
             SET
                 status = ?,
-                sent_at = CASE WHEN ? = 'sent' THEN CURRENT_TIMESTAMP ELSE sent_at END
+                sent_at = CASE WHEN ? = 'sent' THEN CURRENT_TIMESTAMP ELSE sent_at END,
+                error = ?
             WHERE medusa_order_id = ?
             """,
-            (status, status, medusa_order_id),
+            (status, status, error, medusa_order_id),
         )
         return cursor.rowcount == 1
 

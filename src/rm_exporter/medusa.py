@@ -45,6 +45,7 @@ def get_orders(base_url: str, api_key: str) -> list[MedusaOrder]:
                 variant_title=item.get("variant_title"),
                 sku=item.get("variant_sku"),
                 quantity=item["quantity"],
+                # unit_weight_in_grams=item["unit_weight_in_grams"],
                 unit_price=item["unit_price"],
             )
             for item in order["items"]

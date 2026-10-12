@@ -1,11 +1,16 @@
 import unittest
+from unittest.mock import Mock, patch
 
 from rm_exporter.models import (
     MedusaAddress,
     MedusaItem,
     MedusaOrder,
 )
-from rm_exporter.royal_mail import to_payload, transform_order
+from rm_exporter.royal_mail import (
+    send_order_click_and_drop,
+    to_payload,
+    transform_order,
+)
 
 
 class RoyalMailPayloadTests(unittest.TestCase):
@@ -112,3 +117,30 @@ class RoyalMailPayloadTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "package_format_identifier"):
             transform_order(order, 350, "box")
+
+    @patch("rm_exporter.royal_mail.to_payload", return_value={"items": []})
+    @patch("rm_exporter.royal_mail.requests.post")
+    def test_sends_to_click_and_drop_with_expected_request(self, post, to_payload):
+        response = Mock(ok=True)
+        response.json.return_value = {"orderIdentifier": "rm_1"}
+        post.return_value = response
+        order = Mock()
+
+        result = send_order_click_and_drop(
+            "https://royal-mail.example/api/v1/",
+            "api-key",
+            order,
+        )
+
+        self.assertEqual(result, {"orderIdentifier": "rm_1"})
+        post.assert_called_once_with(
+            "https://royal-mail.example/api/v1/Orders",
+            headers={
+                "Authorization": "api-key",
+                "Content-Type": "application/json",
+            },
+            json={"items": []},
+            timeout=30,
+        )
+        to_payload.assert_called_once_with(order)
+        response.raise_for_status.assert_called_once_with()

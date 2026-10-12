@@ -7,12 +7,12 @@ from rm_exporter.main import main
 
 
 class MainTests(unittest.TestCase):
-    @patch("rm_exporter.main.create_order")
+    @patch("rm_exporter.main.send_order_click_and_drop")
     @patch("rm_exporter.main.to_payload", return_value={})
     @patch("rm_exporter.main.transform_order")
     @patch("rm_exporter.main.get_orders")
     def test_default_run_never_posts_to_royal_mail(
-        self, get_orders, transform_order, to_payload, create_order
+        self, get_orders, transform_order, to_payload, send_order_click_and_drop
     ):
         get_orders.return_value = [Mock(id="order_1")]
         transform_order.return_value = Mock()
@@ -26,7 +26,7 @@ class MainTests(unittest.TestCase):
         ), patch.object(sys, "argv", ["main.py"]):
             main()
 
-        create_order.assert_not_called()
+        send_order_click_and_drop.assert_not_called()
         transform_order.assert_called_once_with(
             get_orders.return_value[0],
             package_weight_in_grams=350,

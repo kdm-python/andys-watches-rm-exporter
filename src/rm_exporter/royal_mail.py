@@ -1,4 +1,5 @@
 import requests
+from loguru import logger
 
 from rm_exporter.models import (
     MedusaOrder,
@@ -39,13 +40,14 @@ def transform_order(
         ),
         packages=[
             RoyalMailPackage(
-                weight_in_grams=package_weight_in_grams,
+                weight_in_grams=350,
                 package_format_identifier=package_format_identifier,
                 contents=[
                     RoyalMailProduct(
                         name=item.title,
                         sku=item.sku,
                         quantity=item.quantity,
+                        unit_weight_in_grams=100,
                         unit_value=item.unit_price,
                     )
                     for item in order.items
@@ -95,9 +97,10 @@ def to_payload(order: RoyalMailOrder) -> dict:
                                 "SKU": product.sku,
                                 "quantity": product.quantity,
                                 "unitValue": product.unit_value,
+                                "unitWeightInGrams": product.unit_weight_in_grams,
                             }
                             for product in package.contents
-                        ]
+                        ],
                     }
                     for package in order.packages
                 ],
@@ -122,7 +125,7 @@ def remove_none(value):
     return value
 
 
-def create_order(
+def send_order_click_and_drop(
     api_url: str,
     api_key: str,
     order: RoyalMailOrder,
@@ -130,7 +133,7 @@ def create_order(
     """Create an order in Royal Mail Click & Drop."""
 
     response = requests.post(
-        f"{api_url}/Orders",
+        f"{api_url.rstrip('/')}/Orders",
         headers={
             "Authorization": api_key,
             "Content-Type": "application/json",
@@ -139,9 +142,11 @@ def create_order(
         timeout=30,
     )
 
+    logger.debug(f"Response from Royal Mail: {response}")
+
     if not response.ok:
-        print(f"Royal Mail returned {response.status_code}:")
-        print(response.text)
+        logger.error(f"Royal Mail returned {response.status_code}:")
+        logger.error(response.text)
 
     response.raise_for_status()
     return response.json()

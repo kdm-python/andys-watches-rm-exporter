@@ -23,6 +23,7 @@ class MedusaItem:
     variant_title: str | None
     sku: str | None
     quantity: int
+    # unit_weight_in_grams: int
     unit_price: float
 
 
@@ -82,6 +83,7 @@ class RoyalMailProduct:
     name: str
     quantity: int
     unit_value: float
+    unit_weight_in_grams: int
     sku: str | None
 
 

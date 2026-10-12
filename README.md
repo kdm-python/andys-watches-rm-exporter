@@ -14,8 +14,10 @@ uv run uvicorn rm_exporter.api:app --reload
 ```
 
 `POST /orders` requires an `X-Integration-Key` header. It fetches and
-transforms a Medusa order, stores it as `pending` in `data/orders.db`, and
-returns the Royal Mail payload without submitting it to Royal Mail.
+transforms a Medusa order, stores it as `pending` in `data/orders.db`, then
+submits it to Royal Mail. Successful submissions are marked `sent`; failures
+are marked `failed` with their error message and are retried by the next
+request for that order. Orders already marked `sent` are not submitted again.
 
 Run the test suite with:
 
