@@ -13,7 +13,7 @@ from rm_exporter.models import (
 
 def transform_order(
     order: MedusaOrder,
-    package_weight_in_grams: int,
+    # package_weight_in_grams: int,
     package_format_identifier: str,
 ) -> RoyalMailOrder:
     address = order.shipping_address
