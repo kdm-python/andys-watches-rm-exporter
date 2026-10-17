@@ -10,10 +10,15 @@ from rm_exporter.models import (
     RoyalMailRecipient,
 )
 
+SERVICE_CODES = {
+    "Royal Mail 1st Class": "OLP1",
+    "Royal Mail 2nd Class": "OLP2",
+}
+
 
 def transform_order(
     order: MedusaOrder,
-    # package_weight_in_grams: int,
+    package_weight_in_grams: str,
     package_format_identifier: str,
 ) -> RoyalMailOrder:
     address = order.shipping_address
@@ -22,6 +27,7 @@ def transform_order(
         order_reference=f"AW-{order.display_id}",
         order_date=order.created_at,
         subtotal=order.subtotal,
+        shipping_method=order.shipping_method,
         shipping_cost_charged=order.shipping_total,
         total=order.total,
         recipient=RoyalMailRecipient(
@@ -40,11 +46,11 @@ def transform_order(
         ),
         packages=[
             RoyalMailPackage(
-                weight_in_grams=350,
+                weight_in_grams=int(package_weight_in_grams),
                 package_format_identifier=package_format_identifier,
                 contents=[
                     RoyalMailProduct(
-                        name=item.title,
+                        name=format_item_name(item),
                         sku=item.sku,
                         quantity=item.quantity,
                         unit_weight_in_grams=100,
@@ -59,6 +65,10 @@ def transform_order(
 
 def to_payload(order: RoyalMailOrder) -> dict:
     address = order.recipient.address
+
+    service_code = SERVICE_CODES.get(order.shipping_method)
+    if service_code is None:
+        raise ValueError(f"Unsupported shipping method: {order.shipping_method}")
 
     address_payload = {
         "fullName": address.full_name,
@@ -77,6 +87,8 @@ def to_payload(order: RoyalMailOrder) -> dict:
                 "orderReference": order.order_reference,
                 "orderDate": order.order_date,
                 "subtotal": order.subtotal,
+                # (DEV) Check RM API for correct format of shipping method
+                "shippingMethod": service_code,
                 "shippingCostCharged": order.shipping_cost_charged,
                 "total": order.total,
                 "recipient": {
@@ -93,6 +105,7 @@ def to_payload(order: RoyalMailOrder) -> dict:
                         "packageFormatIdentifier": package.package_format_identifier,
                         "contents": [
                             {
+                                # (DEV) product.name will be replaced with the oiler and size option spliced in
                                 "name": product.name,
                                 "SKU": product.sku,
                                 "quantity": product.quantity,
@@ -123,6 +136,25 @@ def remove_none(value):
         return [remove_none(item) for item in value]
 
     return value
+
+
+def format_item_name(item: dict) -> str:
+    title = item.title or ""
+    subtitle = item.subtitle or ""
+
+    parts = [part.strip() for part in subtitle.split("/")]
+
+    if len(parts) != 2:
+        return f"{title} - {subtitle}" if subtitle else title
+
+    size, oilers = parts
+
+    oilers_text = {
+        "yes": "With Oilers",
+        "no": "Without Oilers",
+    }.get(oilers.lower(), oilers)
+
+    return f"{title} - {size}ml - {oilers_text}"
 
 
 def send_order_click_and_drop(

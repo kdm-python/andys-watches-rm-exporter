@@ -93,8 +93,8 @@ def receive_order(
     # 4. Transform Medusa order into Royal Mail order
     rm_order = transform_order(
         order,
-        package_weight_in_grams=350,
-        package_format_identifier="smallParcel",
+        package_weight_in_grams=os.getenv("PACKAGE_WEIGHT_IN_GRAMS"),
+        package_format_identifier=os.getenv("PACKAGE_FORMAT_IDENTIFIER"),
     )
 
     # 5. Generate the Royal Mail API payload

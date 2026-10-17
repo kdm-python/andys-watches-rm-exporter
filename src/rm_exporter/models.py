@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 ROYAL_MAIL_PACKAGE_FORMAT_IDENTIFIERS = {
     "undefined",
     "letter",
@@ -20,6 +19,7 @@ ROYAL_MAIL_PACKAGE_FORMAT_IDENTIFIERS = {
 @dataclass
 class MedusaItem:
     title: str
+    subtitle: str | None
     variant_title: str | None
     sku: str | None
     quantity: int
@@ -49,6 +49,7 @@ class MedusaOrder:
     email: str
     subtotal: float
     shipping_total: float
+    shipping_method: str
     total: float
     shipping_address: MedusaAddress
     fulfillment_status: str
@@ -107,6 +108,10 @@ class RoyalMailOrder:
     order_reference: str
     order_date: str
     subtotal: float
+
+    # (DEV) What if two items in the order have different shipping methods?
+    shipping_method: str
+
     shipping_cost_charged: float
     total: float
     recipient: RoyalMailRecipient

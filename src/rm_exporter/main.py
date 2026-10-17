@@ -14,7 +14,7 @@ from rm_exporter.royal_mail import (
 
 load_dotenv()
 
-TEMPORARY_DRY_RUN_PACKAGE_WEIGHT_IN_GRAMS = 350
+TEMPORARY_DRY_RUN_PACKAGE_WEIGHT_IN_GRAMS = 100
 TEMPORARY_DRY_RUN_PACKAGE_FORMAT_IDENTIFIER = "smallParcel"
 
 
@@ -71,12 +71,8 @@ def main():
     package_weight_in_grams = args.package_weight_in_grams
     package_format_identifier = args.package_format_identifier
     if not args.post:
-        package_weight_in_grams = (
-            package_weight_in_grams or TEMPORARY_DRY_RUN_PACKAGE_WEIGHT_IN_GRAMS
-        )
-        package_format_identifier = (
-            package_format_identifier or TEMPORARY_DRY_RUN_PACKAGE_FORMAT_IDENTIFIER
-        )
+        package_weight_in_grams = int(os.getenv("RM_PACKAGE_WEIGHT_GRAMS", "100"))
+        package_format_identifier = os.getenv("RM_PACKAGE_FORMAT", "LARGE_LETTER")
         print(
             "Using temporary dry-run package values: "
             f"{package_weight_in_grams}g / {package_format_identifier}"
