@@ -14,9 +14,6 @@ from rm_exporter.royal_mail import (
 
 load_dotenv()
 
-TEMPORARY_DRY_RUN_PACKAGE_WEIGHT_IN_GRAMS = 100
-TEMPORARY_DRY_RUN_PACKAGE_FORMAT_IDENTIFIER = "smallParcel"
-
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -24,24 +21,24 @@ def parse_args():
         "--post", action="store_true", help="create the Royal Mail order"
     )
     parser.add_argument("--order", help="Medusa order ID to transform")
-    parser.add_argument(
-        "--package-weight-in-grams",
-        type=int,
-        help="packed shipment weight required for a live post",
-    )
-    parser.add_argument(
-        "--package-format-identifier",
-        choices=sorted(ROYAL_MAIL_PACKAGE_FORMAT_IDENTIFIERS),
-        help="packed shipment format required for a live post",
-    )
+    # parser.add_argument(
+    #     "--package-weight-in-grams",
+    #     type=int,
+    #     help="packed shipment weight required for a live post",
+    # )
+    # parser.add_argument(
+    #     "--package-format-identifier",
+    #     choices=sorted(ROYAL_MAIL_PACKAGE_FORMAT_IDENTIFIERS),
+    #     help="packed shipment format required for a live post",
+    # )
     args = parser.parse_args()
 
     if args.post and not args.order:
         parser.error("--post requires --order")
-    if args.post and args.package_weight_in_grams is None:
-        parser.error("--post requires --package-weight-in-grams")
-    if args.post and args.package_format_identifier is None:
-        parser.error("--post requires --package-format-identifier")
+    # if args.post and args.package_weight_in_grams is None:
+    #     parser.error("--post requires --package-weight-in-grams")
+    # if args.post and args.package_format_identifier is None:
+    #     parser.error("--post requires --package-format-identifier")
 
     return args
 
@@ -68,8 +65,11 @@ def main():
         order = orders[0]
         print(f"No --order supplied; using first returned order: {order.id}")
 
-    package_weight_in_grams = args.package_weight_in_grams
-    package_format_identifier = args.package_format_identifier
+    # package_weight_in_grams = args.package_weight_in_grams
+    # package_format_identifier = args.package_format_identifier
+    package_weight_in_grams = int(os.getenv("RM_PACKAGE_WEIGHT_GRAMS", "100"))
+    package_format_identifier = os.getenv("RM_PACKAGE_FORMAT", "LARGE_LETTER")
+
     if not args.post:
         package_weight_in_grams = int(os.getenv("RM_PACKAGE_WEIGHT_GRAMS", "100"))
         package_format_identifier = os.getenv("RM_PACKAGE_FORMAT", "LARGE_LETTER")

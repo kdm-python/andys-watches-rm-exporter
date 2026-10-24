@@ -1,4 +1,7 @@
+import os
+
 import requests
+from dotenv import load_dotenv
 from loguru import logger
 
 from rm_exporter.models import (
@@ -10,9 +13,17 @@ from rm_exporter.models import (
     RoyalMailRecipient,
 )
 
+# https://help.parcel.royalmail.com/hc/en-gb/articles/360000935633-Royal-Mail-service-codes-Online-Business-Customers
+
+
+load_dotenv()
+
 SERVICE_CODES = {
-    "Royal Mail 1st Class": "OLP1",
-    "Royal Mail 2nd Class": "OLP2",
+    "Royal Mail 2nd Class Large Letter": os.getenv(
+        "RM_SERVICE_CODE_2ND_CLASS_LARGE_LETTER"
+    ),
+    "Royal Mail Tracked 24": os.getenv("RM_SERVICE_CODE_TRACKED_24"),
+    "Royal Mail Tracked 48": os.getenv("RM_SERVICE_CODE_TRACKED_48"),
 }
 
 
@@ -88,8 +99,11 @@ def to_payload(order: RoyalMailOrder) -> dict:
                 "orderDate": order.order_date,
                 "subtotal": order.subtotal,
                 # (DEV) Check RM API for correct format of shipping method
-                "shippingMethod": service_code,
+                "shippingMethod": order.shipping_method,
                 "shippingCostCharged": order.shipping_cost_charged,
+                "postageDetails": {
+                    "serviceCode": service_code,
+                },
                 "total": order.total,
                 "recipient": {
                     "address": address_payload,
