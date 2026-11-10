@@ -4,14 +4,13 @@ from unittest.mock import Mock
 import pytest
 import requests
 from fastapi.testclient import TestClient
-
 from rm_exporter import api, db
 from rm_exporter.models import MedusaAddress, MedusaOrder
 
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "orders.db")
+def client(temporary_database: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("INTEGRATION_API_KEY", "test-secret")
     monkeypatch.setenv("MEDUSA_BASE_URL", "https://medusa.example")
     monkeypatch.setenv("MEDUSA_ADMIN_API_KEY", "admin-key")
@@ -30,6 +29,7 @@ def medusa_order() -> MedusaOrder:
         email="customer@example.com",
         subtotal=26.79,
         shipping_total=5.00,
+        shipping_method="Tracked 48",
         total=31.79,
         shipping_address=MedusaAddress(
             first_name="Ada",
