@@ -39,6 +39,16 @@ def init_db() -> None:
                 error TEXT
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS royal_mail_dispatches (
+                dispatch_key TEXT PRIMARY KEY,
+                medusa_order_id TEXT NOT NULL,
+                fulfillment_id TEXT,
+                status TEXT NOT NULL,
+                labels JSONB NOT NULL DEFAULT '[]',
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
     logger.info("Database initialized successfully.")
 
 

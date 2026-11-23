@@ -3,16 +3,21 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
 
+import psycopg2
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from rm_exporter.db import create_order, init_db, select_order, update_order_status
 from rm_exporter.medusa import get_order
+from rm_exporter.dispatch import DispatchError, MedusaDispatchClient, dispatch_order
+from rm_exporter.dispatch_store import DispatchBusy, locked_dispatch
 from rm_exporter.royal_mail import (
     send_order_click_and_drop,
     to_payload,
@@ -41,6 +46,66 @@ app.add_middleware(
 
 class OrderRequest(BaseModel):
     order_id: str
+
+
+class DispatchLabel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tracking_number: str = Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")
+    tracking_url: str = Field(default="", max_length=2048)
+    label_url: str = Field(default="", max_length=2048)
+
+    @field_validator("tracking_url", "label_url")
+    @classmethod
+    def http_url(cls, value: str) -> str:
+        if value:
+            try:
+                parsed = urlsplit(value)
+                if parsed.scheme in ("https", "http") and parsed.hostname and not parsed.username:
+                    return value
+            except ValueError:
+                pass
+            raise ValueError("URL must be an absolute HTTP(S) URL without credentials")
+        return value
+
+
+class DispatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    order_id: str = Field(pattern=r"^order_[A-Za-z0-9]+$", max_length=100)
+    # Explicitly excludes label-generation events from this contract.
+    status: Literal["despatched"]
+    fulfillment_id: str | None = Field(default=None, pattern=r"^ful_[A-Za-z0-9]+$", max_length=100)
+    labels: list[DispatchLabel] | None = Field(default=None, max_length=100)
+
+
+@app.post("/orders/dispatch")
+def receive_dispatch(request: DispatchRequest, x_integration_key: str = Header(...)):
+    expected_key = os.getenv("DISPATCH_API_KEY") or os.getenv("INTEGRATION_API_KEY")
+    if not expected_key:
+        raise HTTPException(503, "Dispatch authentication is not configured")
+    if not secrets.compare_digest(x_integration_key, expected_key):
+        raise HTTPException(403, "Unauthorized")
+    base_url = os.getenv("MEDUSA_BASE_URL")
+    api_key = os.getenv("MEDUSA_ADMIN_API_KEY")
+    if not base_url or not api_key:
+        raise HTTPException(503, "Medusa dispatch configuration is missing")
+    try:
+        with locked_dispatch(request.order_id) as store:
+            result = dispatch_order(
+                MedusaDispatchClient(base_url, api_key), store, request.order_id,
+                request.fulfillment_id,
+                [label.model_dump() for label in request.labels] if request.labels is not None else None,
+            )
+        logger.info("Dispatch request completed for order {} (already shipped: {})",
+                    request.order_id, result["already_shipped"])
+        return result
+    except DispatchBusy:
+        raise HTTPException(409, "A dispatch request for this order is in progress; retry shortly") from None
+    except DispatchError as exc:
+        logger.warning("Dispatch request for order {} returned HTTP {}", request.order_id, exc.status_code)
+        raise HTTPException(exc.status_code, exc.detail) from exc
+    except (psycopg2.Error, RuntimeError):
+        logger.error("Dispatch state store is unavailable for order {}", request.order_id)
+        raise HTTPException(503, "Dispatch state store unavailable; check database configuration and retry") from None
 
 
 @app.get("/")

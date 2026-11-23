@@ -1,5 +1,9 @@
 # RM Exporter
 
+For the authenticated Royal Mail → Medusa dispatch bridge and a manual curl
+test, see [DISPATCH.md](DISPATCH.md). It is separate from the existing order
+export below; webhook/polling detection is not enabled yet.
+
 Install the project dependencies with `uv sync`, then run the CLI with:
 
 ```sh
