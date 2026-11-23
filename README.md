@@ -1,8 +1,12 @@
 # RM Exporter
 
+For the separate polling worker, durable manual-alert inbox, and staged local
+tests, see [POLLING.md](POLLING.md). Royal Mail detection defaults to observation
+only; no deployment/systemd configuration is installed by this change.
+
 For the authenticated Royal Mail → Medusa dispatch bridge and a manual curl
 test, see [DISPATCH.md](DISPATCH.md). It is separate from the existing order
-export below; webhook/polling detection is not enabled yet.
+export below; automatic Royal Mail dispatch detection is disabled by default.
 
 Install the project dependencies with `uv sync`, then run the CLI with:
 

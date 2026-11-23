@@ -2,7 +2,8 @@
 
 `POST /orders/dispatch` is the authenticated bridge from an owner-confirmed
 Royal Mail dispatch to Medusa. It makes no Royal Mail API calls. A future
-poller or verified callback adapter can call this same contract. Label
+adapter can call this same contract. The [separate polling worker](POLLING.md)
+now uses it, with automatic Royal Mail detection disabled by default. Label
 generation is not a dispatch trigger.
 
 ## Configuration and startup

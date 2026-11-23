@@ -3,8 +3,6 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
-from urllib.parse import urlsplit
 
 import psycopg2
 import requests
@@ -12,12 +10,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel
 
 from rm_exporter.db import create_order, init_db, select_order, update_order_status
 from rm_exporter.medusa import get_order
 from rm_exporter.dispatch import DispatchError, MedusaDispatchClient, dispatch_order
 from rm_exporter.dispatch_store import DispatchBusy, locked_dispatch
+from rm_exporter.dispatch_schema import DispatchRequest
+from rm_exporter.poll_store import QueueConflict, init_polling_db, polling_store
 from rm_exporter.royal_mail import (
     send_order_click_and_drop,
     to_payload,
@@ -30,6 +30,7 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    init_polling_db()
     yield
 
 
@@ -48,42 +49,46 @@ class OrderRequest(BaseModel):
     order_id: str
 
 
-class DispatchLabel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    tracking_number: str = Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")
-    tracking_url: str = Field(default="", max_length=2048)
-    label_url: str = Field(default="", max_length=2048)
-
-    @field_validator("tracking_url", "label_url")
-    @classmethod
-    def http_url(cls, value: str) -> str:
-        if value:
-            try:
-                parsed = urlsplit(value)
-                if parsed.scheme in ("https", "http") and parsed.hostname and not parsed.username:
-                    return value
-            except ValueError:
-                pass
-            raise ValueError("URL must be an absolute HTTP(S) URL without credentials")
-        return value
-
-
-class DispatchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    order_id: str = Field(pattern=r"^order_[A-Za-z0-9]+$", max_length=100)
-    # Explicitly excludes label-generation events from this contract.
-    status: Literal["despatched"]
-    fulfillment_id: str | None = Field(default=None, pattern=r"^ful_[A-Za-z0-9]+$", max_length=100)
-    labels: list[DispatchLabel] | None = Field(default=None, max_length=100)
-
-
-@app.post("/orders/dispatch")
-def receive_dispatch(request: DispatchRequest, x_integration_key: str = Header(...)):
+def authenticate_dispatch(x_integration_key: str):
     expected_key = os.getenv("DISPATCH_API_KEY") or os.getenv("INTEGRATION_API_KEY")
     if not expected_key:
         raise HTTPException(503, "Dispatch authentication is not configured")
     if not secrets.compare_digest(x_integration_key, expected_key):
         raise HTTPException(403, "Unauthorized")
+
+
+@app.post("/polling/dispatch", status_code=202)
+def queue_dispatch(request: DispatchRequest, x_integration_key: str = Header(...)):
+    """Explicit manual alert into the worker inbox; does not itself contact Medusa."""
+    authenticate_dispatch(x_integration_key)
+    try:
+        with polling_store() as store:
+            event = store.enqueue(request.model_dump(exclude_none=True))
+        return {"event_key": event["event_key"], "status": event["status"]}
+    except QueueConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (psycopg2.Error, RuntimeError):
+        raise HTTPException(503, "Polling inbox unavailable; check database configuration") from None
+
+
+@app.get("/polling/events/{event_key}")
+def polling_event(event_key: str, x_integration_key: str = Header(...)):
+    authenticate_dispatch(x_integration_key)
+    try:
+        with polling_store() as store:
+            rows = store.rows("""SELECT event_key, status, attempts, last_error, result,
+                                 created_at, updated_at FROM royal_mail_poll_inbox
+                                 WHERE event_key = %s""", (event_key,))
+        if not rows:
+            raise HTTPException(404, "Polling event not found")
+        return rows[0]
+    except (psycopg2.Error, RuntimeError):
+        raise HTTPException(503, "Polling inbox unavailable; check database configuration") from None
+
+
+@app.post("/orders/dispatch")
+def receive_dispatch(request: DispatchRequest, x_integration_key: str = Header(...)):
+    authenticate_dispatch(x_integration_key)
     base_url = os.getenv("MEDUSA_BASE_URL")
     api_key = os.getenv("MEDUSA_ADMIN_API_KEY")
     if not base_url or not api_key:
