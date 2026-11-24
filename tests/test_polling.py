@@ -223,3 +223,52 @@ def test_stop_signal_finishes_without_dispatching():
     store.due_events.return_value = [{"event_key": "order_123"}]
     assert run_cycle(store, apply=True, stop=stop)["delivered"] == 0
     store.attempted.assert_not_called()
+
+
+@pytest.mark.parametrize("active,manual,reads", [
+    ("false", False, False), (" FALSE ", False, False),
+    ("true", False, True), (None, False, True), ("true", True, False),
+])
+def test_polling_switch_preserves_inbox_delivery(monkeypatch, active, manual, reads):
+    from contextlib import contextmanager
+    store = Mock()
+    store.due_orders.return_value = []
+    store.due_events.return_value = [{"event_key": "order_123", "payload": {
+        "order_id": "order_123", "status": "despatched"}}]
+    @contextmanager
+    def memory_store(**_): yield store
+    monkeypatch.setattr(poller, "polling_store", memory_store)
+    for name in ("init_db", "init_polling_db", "load_dotenv"):
+        monkeypatch.setattr(poller, name, Mock())
+    reader = Mock()
+    dispatcher = Mock()
+    dispatcher.send.return_value = {"order_id": "order_123", "status": "shipped", "fulfillment_id": "ful_123"}
+    monkeypatch.setattr(poller, "RoyalMailReader", reader)
+    monkeypatch.setattr(poller, "ExporterDispatcher", Mock(return_value=dispatcher))
+    monkeypatch.setenv("INTEGRATION_API_KEY", "test-key")
+    if active is None:
+        monkeypatch.delenv("POLLING_ACTIVE", raising=False)
+    else:
+        monkeypatch.setenv("POLLING_ACTIVE", active)
+    for name in ("ROYAL_MAIL_BASE_URL", "ROYAL_MAIL_API_KEY"):
+        if reads:
+            monkeypatch.setenv(name, "test-value")
+        else:
+            monkeypatch.delenv(name, raising=False)
+    assert poller.main(["--once", "--apply", "--trigger", "shipped-on"] +
+                       (["--manual-only"] if manual else [])) == 0
+    assert reader.called == reads
+    assert store.discover.called == reads
+    dispatcher.send.assert_called_once()
+    assert store.event_result.call_args.args[1] == "delivered"
+
+
+def test_invalid_polling_switch_fails_before_processing(monkeypatch):
+    monkeypatch.setattr(poller, "load_dotenv", Mock())
+    monkeypatch.setenv("POLLING_ACTIVE", "typo")
+    initialize = Mock()
+    monkeypatch.setattr(poller, "init_db", initialize)
+    with pytest.raises(SystemExit) as exc:
+        poller.main(["--once"])
+    assert exc.value.code == 2
+    initialize.assert_not_called()

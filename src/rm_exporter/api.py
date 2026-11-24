@@ -13,10 +13,10 @@ from loguru import logger
 from pydantic import BaseModel
 
 from rm_exporter.db import create_order, init_db, select_order, update_order_status
-from rm_exporter.medusa import get_order
 from rm_exporter.dispatch import DispatchError, MedusaDispatchClient, dispatch_order
-from rm_exporter.dispatch_store import DispatchBusy, locked_dispatch
 from rm_exporter.dispatch_schema import DispatchRequest
+from rm_exporter.dispatch_store import DispatchBusy, locked_dispatch
+from rm_exporter.medusa import get_order
 from rm_exporter.poll_store import QueueConflict, init_polling_db, polling_store
 from rm_exporter.royal_mail import (
     send_order_click_and_drop,
@@ -68,7 +68,9 @@ def queue_dispatch(request: DispatchRequest, x_integration_key: str = Header(...
     except QueueConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     except (psycopg2.Error, RuntimeError):
-        raise HTTPException(503, "Polling inbox unavailable; check database configuration") from None
+        raise HTTPException(
+            503, "Polling inbox unavailable; check database configuration"
+        ) from None
 
 
 @app.get("/polling/events/{event_key}")
@@ -76,14 +78,19 @@ def polling_event(event_key: str, x_integration_key: str = Header(...)):
     authenticate_dispatch(x_integration_key)
     try:
         with polling_store() as store:
-            rows = store.rows("""SELECT event_key, status, attempts, last_error, result,
+            rows = store.rows(
+                """SELECT event_key, status, attempts, last_error, result,
                                  created_at, updated_at FROM royal_mail_poll_inbox
-                                 WHERE event_key = %s""", (event_key,))
+                                 WHERE event_key = %s""",
+                (event_key,),
+            )
         if not rows:
             raise HTTPException(404, "Polling event not found")
         return rows[0]
     except (psycopg2.Error, RuntimeError):
-        raise HTTPException(503, "Polling inbox unavailable; check database configuration") from None
+        raise HTTPException(
+            503, "Polling inbox unavailable; check database configuration"
+        ) from None
 
 
 @app.post("/orders/dispatch")
@@ -96,21 +103,39 @@ def receive_dispatch(request: DispatchRequest, x_integration_key: str = Header(.
     try:
         with locked_dispatch(request.order_id) as store:
             result = dispatch_order(
-                MedusaDispatchClient(base_url, api_key), store, request.order_id,
+                MedusaDispatchClient(base_url, api_key),
+                store,
+                request.order_id,
                 request.fulfillment_id,
-                [label.model_dump() for label in request.labels] if request.labels is not None else None,
+                [label.model_dump() for label in request.labels]
+                if request.labels is not None
+                else None,
             )
-        logger.info("Dispatch request completed for order {} (already shipped: {})",
-                    request.order_id, result["already_shipped"])
+        logger.info(
+            "Dispatch request completed for order {} (already shipped: {})",
+            request.order_id,
+            result["already_shipped"],
+        )
         return result
     except DispatchBusy:
-        raise HTTPException(409, "A dispatch request for this order is in progress; retry shortly") from None
+        raise HTTPException(
+            409, "A dispatch request for this order is in progress; retry shortly"
+        ) from None
     except DispatchError as exc:
-        logger.warning("Dispatch request for order {} returned HTTP {}", request.order_id, exc.status_code)
+        logger.warning(
+            "Dispatch request for order {} returned HTTP {}",
+            request.order_id,
+            exc.status_code,
+        )
         raise HTTPException(exc.status_code, exc.detail) from exc
     except (psycopg2.Error, RuntimeError):
-        logger.error("Dispatch state store is unavailable for order {}", request.order_id)
-        raise HTTPException(503, "Dispatch state store unavailable; check database configuration and retry") from None
+        logger.error(
+            "Dispatch state store is unavailable for order {}", request.order_id
+        )
+        raise HTTPException(
+            503,
+            "Dispatch state store unavailable; check database configuration and retry",
+        ) from None
 
 
 @app.get("/")

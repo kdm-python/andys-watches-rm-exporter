@@ -39,12 +39,32 @@ already set by the shell/systemd take precedence. Configuration:
 | Variable | Purpose |
 | --- | --- |
 | `DB_URL` | Shared exporter database. Required in all modes. |
+| `POLLING_ACTIVE` | `true` (default when omitted) enables Click & Drop reads; `false` skips them while continuing inbox processing. Case-insensitive; other values fail startup. Read at startup, so restart after changes. |
 | `RM_EXPORTER_BASE_URL` | Internal API destination, e.g. `http://127.0.0.1:8001` locally. Defaults to loopback and `PORT` (or 8001). Set this explicitly for the later LXC service. |
 | `DISPATCH_API_KEY` / `INTEGRATION_API_KEY` | Dispatch key takes precedence; same key used by the existing dispatch endpoint. Required with `--apply`. |
 | `ROYAL_MAIL_BASE_URL` / `ROYAL_MAIL_API_KEY` | Existing public Click & Drop API configuration. Not needed with `--manual-only`. |
 
 Medusa credentials remain on the exporter API side. The worker itself posts
 to the existing bridge; it does not reimplement shipment creation.
+
+With `POLLING_ACTIVE=false`, run `uv run rm-poller --apply` to continuously
+deliver manually queued alerts through Medusa/email without contacting Click &
+Drop. Royal Mail credentials are not required in this mode. Existing queued
+events, including previously detected Royal Mail events, can still be delivered.
+Without `--apply`, the worker only reports `would_dispatch`.
+This switch controls the separate worker's reads; the existing order export
+and authenticated dispatch/inbox endpoints continue operating normally.
+
+For a single read-only Click & Drop check while `.env` contains `false`, use:
+
+```sh
+POLLING_ACTIVE=true uv run rm-poller --once --order-id order_REPLACE_ME
+```
+
+This does not send dispatches. For continuous automatic detection and delivery,
+set `POLLING_ACTIVE=true`, restart the worker, and use `--apply --trigger shipped-on`
+only after verifying the account's `shippedOn` behaviour. `--manual-only` always
+skips Royal Mail reads, even when `POLLING_ACTIVE=true`.
 
 ## 1. Test the inbox and worker without Royal Mail
 

@@ -39,8 +39,11 @@ class RoyalMailReader:
             raise ValueError("Request between 1 and 100 Royal Mail references")
         remaining = ceil(self.cooldown_until - monotonic())
         if remaining > 0:
-            raise PollHTTPError("Royal Mail rate-limit cooldown is active", status_code=429,
-                                retry_after=remaining)
+            raise PollHTTPError(
+                "Royal Mail rate-limit cooldown is active",
+                status_code=429,
+                retry_after=remaining,
+            )
         # Leave rate-limit headroom for the independent outbound exporter.
         if self.last_request is not None:
             if self.stop.wait(max(0, 1 - (monotonic() - self.last_request))):
@@ -51,7 +54,8 @@ class RoyalMailReader:
             response = requests.get(
                 f"{self.base_url}/orders/{identifiers}",
                 headers={"Authorization": self.api_key},
-                timeout=(5, 30), allow_redirects=False,
+                timeout=(5, 30),
+                allow_redirects=False,
             )
         except requests.RequestException as exc:
             raise PollHTTPError("Royal Mail connection failed or timed out") from exc
@@ -60,8 +64,11 @@ class RoyalMailReader:
             if response.status_code == 429:
                 delay = max(30, delay)
                 self.cooldown_until = monotonic() + delay
-            raise PollHTTPError(f"Royal Mail returned HTTP {response.status_code}",
-                                retry_after=delay, status_code=response.status_code)
+            raise PollHTTPError(
+                f"Royal Mail returned HTTP {response.status_code}",
+                retry_after=delay,
+                status_code=response.status_code,
+            )
         try:
             rows = response.json()
         except ValueError as exc:
@@ -72,7 +79,11 @@ class RoyalMailReader:
 
 
 def timestamp(value, field):
-    if value is None or value == "" or (isinstance(value, str) and value.startswith("0001-01-01")):
+    if (
+        value is None
+        or value == ""
+        or (isinstance(value, str) and value.startswith("0001-01-01"))
+    ):
         return None
     try:
         if not isinstance(value, str) or "T" not in value:
@@ -81,32 +92,46 @@ def timestamp(value, field):
         # Live personal-account responses omit the timezone. We only compare
         # state transitions, not instants: retain that local/unspecified value
         # without inventing a UTC offset. Normalize explicit offsets to UTC.
-        return date.astimezone(timezone.utc).isoformat() if date.tzinfo else date.isoformat()
+        return (
+            date.astimezone(timezone.utc).isoformat()
+            if date.tzinfo
+            else date.isoformat()
+        )
     except (ValueError, TypeError, AttributeError) as exc:
         raise PollHTTPError(f"Invalid {field}; expected an ISO date and time") from exc
 
 
 def observation(raw):
     if not raw.get("orderIdentifier") or not isinstance(raw.get("orderReference"), str):
-        raise PollHTTPError("Royal Mail lookup is missing its order identifier/reference")
+        raise PollHTTPError(
+            "Royal Mail lookup is missing its order identifier/reference"
+        )
     packages = raw.get("packages") or []
     if not isinstance(packages, list) or any(not isinstance(p, dict) for p in packages):
         raise PollHTTPError("Royal Mail returned invalid package tracking")
+
     def tracking(value):
         if value is None:
             return None
         if not isinstance(value, str):
             raise PollHTTPError("Royal Mail returned a non-string tracking number")
         return value.strip() or None
+
     # Persist/log only fields needed to determine dispatch, never customer data.
     return {
-        "orderIdentifier": raw["orderIdentifier"], "orderReference": raw["orderReference"],
+        "orderIdentifier": raw["orderIdentifier"],
+        "orderReference": raw["orderReference"],
         "printedOn": timestamp(raw.get("printedOn"), "printedOn"),
         "shippedOn": timestamp(raw.get("shippedOn"), "shippedOn"),
         "manifestedOn": timestamp(raw.get("manifestedOn"), "manifestedOn"),
         "trackingNumber": tracking(raw.get("trackingNumber")),
-        "packages": [{"packageNumber": p.get("packageNumber"), "trackingNumber": tracking(p.get("trackingNumber"))}
-                     for p in packages],
+        "packages": [
+            {
+                "packageNumber": p.get("packageNumber"),
+                "trackingNumber": tracking(p.get("trackingNumber")),
+            }
+            for p in packages
+        ],
     }
 
 
@@ -124,11 +149,21 @@ def classify(row, current):
 
 
 def dispatch_payload(order_id, current):
-    numbers = [p.get("trackingNumber") for p in current["packages"] if p.get("trackingNumber")]
-    numbers = numbers or ([current["trackingNumber"]] if current["trackingNumber"] else [])
-    labels = [{"tracking_number": number, "tracking_url": "", "label_url": ""}
-              for number in dict.fromkeys(numbers)]
+    numbers = [
+        p.get("trackingNumber") for p in current["packages"] if p.get("trackingNumber")
+    ]
+    numbers = numbers or (
+        [current["trackingNumber"]] if current["trackingNumber"] else []
+    )
+    labels = [
+        {"tracking_number": number, "tracking_url": "", "label_url": ""}
+        for number in dict.fromkeys(numbers)
+    ]
     # Do not invent tracking or postage-label URLs. Numbers alone are supported.
-    return DispatchRequest.model_validate({
-        "order_id": order_id, "status": "despatched", "labels": labels or None,
-    }).model_dump(exclude_none=True)
+    return DispatchRequest.model_validate(
+        {
+            "order_id": order_id,
+            "status": "despatched",
+            "labels": labels or None,
+        }
+    ).model_dump(exclude_none=True)

@@ -15,10 +15,18 @@ from pydantic import ValidationError
 
 from rm_exporter.db import init_db
 from rm_exporter.poll_store import (
-    PollerBusy, QueueConflict, init_polling_db, polling_store,
+    PollerBusy,
+    QueueConflict,
+    init_polling_db,
+    polling_store,
 )
 from rm_exporter.royal_mail_polling import (
-    PollHTTPError, RoyalMailReader, classify, dispatch_payload, observation, retry_after,
+    PollHTTPError,
+    RoyalMailReader,
+    classify,
+    dispatch_payload,
+    observation,
+    retry_after,
 )
 
 
@@ -33,39 +41,79 @@ class ExporterDispatcher:
 
     def send(self, payload):
         try:
-            response = requests.post(self.url, json=payload,
-                                     headers={"X-Integration-Key": self.api_key},
-                                     timeout=(5, 90), allow_redirects=False)
+            response = requests.post(
+                self.url,
+                json=payload,
+                headers={"X-Integration-Key": self.api_key},
+                timeout=(5, 90),
+                allow_redirects=False,
+            )
         except requests.RequestException as exc:
-            raise PollHTTPError("Exporter connection failed or timed out; retry will reconcile Medusa") from exc
+            raise PollHTTPError(
+                "Exporter connection failed or timed out; retry will reconcile Medusa"
+            ) from exc
         if response.status_code != 200:
             # An order lock conflict is transient; other conflicts need review.
             try:
                 detail = str(response.json().get("detail", ""))[:500]
             except (ValueError, AttributeError):
                 detail = ""
-            busy = response.status_code == 409 and "in progress; retry shortly" in detail
-            transient = busy or response.status_code >= 500 or response.status_code == 429
-            raise PollHTTPError(f"Exporter returned HTTP {response.status_code}: {detail}",
-                                retryable=transient, retry_after=retry_after(response))
+            busy = (
+                response.status_code == 409 and "in progress; retry shortly" in detail
+            )
+            transient = (
+                busy or response.status_code >= 500 or response.status_code == 429
+            )
+            raise PollHTTPError(
+                f"Exporter returned HTTP {response.status_code}: {detail}",
+                retryable=transient,
+                retry_after=retry_after(response),
+            )
         try:
             result = response.json()
         except ValueError as exc:
             raise PollHTTPError("Exporter returned invalid JSON") from exc
-        if (not isinstance(result, dict) or result.get("order_id") != payload["order_id"]
-                or result.get("status") != "shipped" or not result.get("fulfillment_id")):
+        if (
+            not isinstance(result, dict)
+            or result.get("order_id") != payload["order_id"]
+            or result.get("status") != "shipped"
+            or not result.get("fulfillment_id")
+        ):
             raise PollHTTPError("Exporter returned an unexpected dispatch result")
         return result
 
 
-def run_cycle(store, *, reader=None, dispatcher=None, apply=False,
-              trigger="disabled", order_id=None, interval=60, stop=None):
+def run_cycle(
+    store,
+    *,
+    reader=None,
+    dispatcher=None,
+    apply=False,
+    trigger="disabled",
+    order_id=None,
+    interval=60,
+    stop=None,
+):
     stop = stop or Event()
-    counts = {key: 0 for key in ("observed", "detected", "queued", "delivered", "retry", "review", "errors", "would_dispatch")}
+    counts = {
+        key: 0
+        for key in (
+            "observed",
+            "detected",
+            "queued",
+            "delivered",
+            "retry",
+            "review",
+            "errors",
+            "would_dispatch",
+        )
+    }
     if reader is not None:
         store.discover(order_id)
         due = store.due_orders(order_id)
-        batches = deque(due[offset:offset + 100] for offset in range(0, len(due), 100))
+        batches = deque(
+            due[offset : offset + 100] for offset in range(0, len(due), 100)
+        )
         while batches:
             if stop.is_set():
                 break
@@ -87,32 +135,60 @@ def run_cycle(store, *, reader=None, dispatcher=None, apply=False,
                     batch = batch + [row for pending in batches for row in pending]
                     batches.clear()
                 for row in batch:
-                    store.poll_failure(row, str(exc), max(backoff(row["failures"]), exc.retry_after))
+                    store.poll_failure(
+                        row, str(exc), max(backoff(row["failures"]), exc.retry_after)
+                    )
                     counts["errors"] += 1
                 continue
             for row in batch:
                 try:
-                    matches = [r for r in rows if r.get("orderReference") == row["royal_mail_reference"]]
+                    matches = [
+                        r
+                        for r in rows
+                        if r.get("orderReference") == row["royal_mail_reference"]
+                    ]
                     if len(matches) != 1:
-                        raise PollHTTPError("Royal Mail reference was missing or ambiguous; nothing dispatched")
+                        raise PollHTTPError(
+                            "Royal Mail reference was missing or ambiguous; nothing dispatched"
+                        )
                     current = observation(matches[0])
                     status = classify(row, current)
-                    logger.info("Royal Mail observation for {}: {} ({})",
-                                row["medusa_order_id"], json.dumps(current), status)
+                    logger.info(
+                        "Royal Mail observation for {}: {} ({})",
+                        row["medusa_order_id"],
+                        json.dumps(current),
+                        status,
+                    )
                     counts["observed"] += 1
                     if status == "detected":
                         counts["detected"] += 1
                         if apply and trigger == "shipped-on":
-                            store.enqueue(dispatch_payload(row["medusa_order_id"], current), "royal-mail")
+                            store.enqueue(
+                                dispatch_payload(row["medusa_order_id"], current),
+                                "royal-mail",
+                            )
                             status = "queued"
                             counts["queued"] += 1
                     if status in ("review", "historical"):
                         counts["review"] += 1
                     store.observe(row, current, status, interval)
-                except (PollHTTPError, QueueConflict, ValidationError, TypeError) as exc:
+                except (
+                    PollHTTPError,
+                    QueueConflict,
+                    ValidationError,
+                    TypeError,
+                ) as exc:
                     # A bad response for one order must not prevent checking others.
-                    message = str(exc) if isinstance(exc, (PollHTTPError, QueueConflict)) else "Invalid Royal Mail tracking data"
-                    logger.warning("Royal Mail observation rejected for {}: {}", row["medusa_order_id"], message)
+                    message = (
+                        str(exc)
+                        if isinstance(exc, (PollHTTPError, QueueConflict))
+                        else "Invalid Royal Mail tracking data"
+                    )
+                    logger.warning(
+                        "Royal Mail observation rejected for {}: {}",
+                        row["medusa_order_id"],
+                        message,
+                    )
                     store.poll_failure(row, message, backoff(row["failures"]))
                     counts["errors"] += 1
     for event in store.due_events(order_id):
@@ -120,20 +196,32 @@ def run_cycle(store, *, reader=None, dispatcher=None, apply=False,
             break
         if not apply:
             counts["would_dispatch"] += 1
-            logger.info("Would dispatch queued event {} (use --apply to send)", event["event_key"])
+            logger.info(
+                "Would dispatch queued event {} (use --apply to send)",
+                event["event_key"],
+            )
             continue
         store.attempted(event["event_key"])
         try:
             result = dispatcher.send(event["payload"])
             store.event_result(event["event_key"], "delivered", result=result)
-            logger.info("Delivered dispatch event {} (already shipped: {})",
-                        event["event_key"], result.get("already_shipped"))
+            logger.info(
+                "Delivered dispatch event {} (already shipped: {})",
+                event["event_key"],
+                result.get("already_shipped"),
+            )
             counts["delivered"] += 1
         except PollHTTPError as exc:
             status = "retry" if exc.retryable else "review"
-            store.event_result(event["event_key"], status, error=str(exc),
-                               delay=max(backoff(event["attempts"]), exc.retry_after))
-            logger.warning("Dispatch event {} needs {}: {}", event["event_key"], status, exc)
+            store.event_result(
+                event["event_key"],
+                status,
+                error=str(exc),
+                delay=max(backoff(event["attempts"]), exc.retry_after),
+            )
+            logger.warning(
+                "Dispatch event {} needs {}: {}", event["event_key"], status, exc
+            )
             counts[status] += 1
     return counts
 
@@ -148,15 +236,39 @@ def positive(value):
 def main(argv=None):
     load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--once", action="store_true", help="run one bounded cycle and exit")
-    parser.add_argument("--manual-only", action="store_true", help="consume the inbox without calling Royal Mail")
-    parser.add_argument("--apply", action="store_true", help="send queued dispatches to the exporter (otherwise observe only)")
-    parser.add_argument("--trigger", choices=("disabled", "shipped-on"), default="disabled",
-                        help="enable shippedOn detection only after verifying account behaviour")
+    parser.add_argument(
+        "--once", action="store_true", help="run one bounded cycle and exit"
+    )
+    parser.add_argument(
+        "--manual-only",
+        action="store_true",
+        help="consume the inbox without calling Royal Mail",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="send queued dispatches to the exporter (otherwise observe only)",
+    )
+    parser.add_argument(
+        "--trigger",
+        choices=("disabled", "shipped-on"),
+        default="disabled",
+        help="enable shippedOn detection only after verifying account behaviour",
+    )
     parser.add_argument("--interval", type=positive, default=60)
-    parser.add_argument("--order-id", help="limit both observations and inbox delivery to one Medusa order")
-    parser.add_argument("--retry-event", help="requeue one unfinished event after resolving its error, then exit")
+    parser.add_argument(
+        "--order-id",
+        help="limit both observations and inbox delivery to one Medusa order",
+    )
+    parser.add_argument(
+        "--retry-event",
+        help="requeue one unfinished event after resolving its error, then exit",
+    )
     args = parser.parse_args(argv)
+    polling_value = os.getenv("POLLING_ACTIVE", "true").strip().lower()
+    if polling_value not in ("true", "false"):
+        parser.error("POLLING_ACTIVE must be true or false")
+    polling_active = polling_value == "true"
     stop = Event()
     previous_handlers = {}
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -165,16 +277,30 @@ def main(argv=None):
     try:
         reader = None
         dispatcher = None
-        if not args.manual_only and not args.retry_event:
-            base, key = os.getenv("ROYAL_MAIL_BASE_URL"), os.getenv("ROYAL_MAIL_API_KEY")
+        if not polling_active:
+            logger.info(
+                "POLLING_ACTIVE=false: Click & Drop polling disabled; queued dispatches remain available (delivery requires --apply)"
+            )
+        if polling_active and not args.manual_only and not args.retry_event:
+            base, key = (
+                os.getenv("ROYAL_MAIL_BASE_URL"),
+                os.getenv("ROYAL_MAIL_API_KEY"),
+            )
             if not base or not key:
-                parser.error("ROYAL_MAIL_BASE_URL and ROYAL_MAIL_API_KEY are required, or use --manual-only")
+                parser.error(
+                    "ROYAL_MAIL_BASE_URL and ROYAL_MAIL_API_KEY are required, or use --manual-only"
+                )
             reader = RoyalMailReader(base, key, stop)
         if args.apply and not args.retry_event:
             key = os.getenv("DISPATCH_API_KEY") or os.getenv("INTEGRATION_API_KEY")
             if not key:
-                parser.error("DISPATCH_API_KEY or INTEGRATION_API_KEY is required with --apply")
-            base = os.getenv("RM_EXPORTER_BASE_URL") or f"http://127.0.0.1:{os.getenv('PORT', '8001')}"
+                parser.error(
+                    "DISPATCH_API_KEY or INTEGRATION_API_KEY is required with --apply"
+                )
+            base = (
+                os.getenv("RM_EXPORTER_BASE_URL")
+                or f"http://127.0.0.1:{os.getenv('PORT', '8001')}"
+            )
             dispatcher = ExporterDispatcher(base, key)
         init_db()
         init_polling_db()
@@ -185,14 +311,27 @@ def main(argv=None):
                         store.retry_event(args.retry_event)
                         print(json.dumps({"requeued": args.retry_event}), flush=True)
                         return 0
-                    counts = run_cycle(store, reader=reader, dispatcher=dispatcher,
-                                       apply=args.apply, trigger=args.trigger, order_id=args.order_id,
-                                       interval=args.interval, stop=stop)
+                    counts = run_cycle(
+                        store,
+                        reader=reader,
+                        dispatcher=dispatcher,
+                        apply=args.apply,
+                        trigger=args.trigger,
+                        order_id=args.order_id,
+                        interval=args.interval,
+                        stop=stop,
+                    )
                     print(json.dumps(counts), flush=True)
                 if args.once:
-                    return 1 if counts["errors"] or counts["retry"] or counts["review"] else 0
+                    return (
+                        1
+                        if counts["errors"] or counts["retry"] or counts["review"]
+                        else 0
+                    )
             except PollerBusy:
-                logger.warning("Another polling worker owns this cycle; no requests sent")
+                logger.warning(
+                    "Another polling worker owns this cycle; no requests sent"
+                )
                 if args.once or args.retry_event:
                     return 1
             except psycopg2.Error:

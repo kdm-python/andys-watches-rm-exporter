@@ -18,7 +18,11 @@ class DispatchLabel(BaseModel):
         if value:
             try:
                 parsed = urlsplit(value)
-                if parsed.scheme in ("https", "http") and parsed.hostname and not parsed.username:
+                if (
+                    parsed.scheme in ("https", "http")
+                    and parsed.hostname
+                    and not parsed.username
+                ):
                     return value
             except ValueError:
                 pass
@@ -31,7 +35,7 @@ class DispatchRequest(BaseModel):
     order_id: str = Field(pattern=r"^order_[A-Za-z0-9]+$", max_length=100)
     # Explicitly excludes label-generation events from this contract.
     status: Literal["despatched"]
-    fulfillment_id: str | None = Field(default=None, pattern=r"^ful_[A-Za-z0-9]+$", max_length=100)
+    fulfillment_id: str | None = Field(
+        default=None, pattern=r"^ful_[A-Za-z0-9]+$", max_length=100
+    )
     labels: list[DispatchLabel] | None = Field(default=None, max_length=100)
-
-
