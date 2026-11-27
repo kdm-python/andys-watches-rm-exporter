@@ -34,9 +34,7 @@ class RoyalMailReader:
         self.last_request = None
         self.cooldown_until = 0
 
-    def orders(self, references):
-        if not 1 <= len(references) <= 100:
-            raise ValueError("Request between 1 and 100 Royal Mail references")
+    def _get(self, path):
         remaining = ceil(self.cooldown_until - monotonic())
         if remaining > 0:
             raise PollHTTPError(
@@ -49,10 +47,9 @@ class RoyalMailReader:
             if self.stop.wait(max(0, 1 - (monotonic() - self.last_request))):
                 raise InterruptedError()
         self.last_request = monotonic()
-        identifiers = ";".join('"' + quote(ref, safe="") + '"' for ref in references)
         try:
             response = requests.get(
-                f"{self.base_url}/orders/{identifiers}",
+                f"{self.base_url}/{path}",
                 headers={"Authorization": self.api_key},
                 timeout=(5, 30),
                 allow_redirects=False,
@@ -70,9 +67,24 @@ class RoyalMailReader:
                 status_code=response.status_code,
             )
         try:
-            rows = response.json()
+            return response.json()
         except ValueError as exc:
             raise PollHTTPError("Royal Mail returned invalid JSON") from exc
+
+    def connectivity(self):
+        """Make an authenticated, read-only account request to Click & Drop."""
+        carriers = self._get("carriers")
+        if not isinstance(carriers, list) or any(
+            not isinstance(carrier, dict) for carrier in carriers
+        ):
+            raise PollHTTPError("Expected the Click & Drop carrier array")
+        return carriers
+
+    def orders(self, references):
+        if not 1 <= len(references) <= 100:
+            raise ValueError("Request between 1 and 100 Royal Mail references")
+        identifiers = ";".join('"' + quote(ref, safe="") + '"' for ref in references)
+        rows = self._get(f"orders/{identifiers}")
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise PollHTTPError("Expected the ordinary Click & Drop order lookup array")
         return rows

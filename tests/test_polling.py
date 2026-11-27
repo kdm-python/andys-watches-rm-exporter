@@ -6,6 +6,7 @@ import requests
 
 from rm_exporter import poller
 from rm_exporter.poller import (
+    ClickDropHealth,
     ExporterDispatcher,
     PollerCycleHealth,
     run_cycle,
@@ -29,7 +30,10 @@ def watch(**changes):
 
 def test_poller_liveness_is_owned_by_the_poller_process():
     cycle_health = PollerCycleHealth(60, True)
-    server = start_liveness_server("127.0.0.1", 0, cycle_health)
+    click_drop_health = ClickDropHealth(60, True)
+    server = start_liveness_server(
+        "127.0.0.1", 0, cycle_health, click_drop_health
+    )
     try:
         base = f"http://127.0.0.1:{server.server_port}"
         response = requests.get(base + "/health/live", timeout=2)
@@ -44,6 +48,11 @@ def test_poller_liveness_is_owned_by_the_poller_process():
         ready = requests.get(base + "/health/ready", timeout=2)
         assert ready.status_code == 200
         assert ready.json()["checks"] == {"polling": "ok", "cycle": "ok"}
+        click_drop_health.check_started()
+        click_drop_health.check_succeeded()
+        dependency = requests.get(base + "/health/click-and-drop", timeout=2)
+        assert dependency.status_code == 200
+        assert dependency.json()["checks"] == {"click_and_drop": "ok"}
         assert requests.get(base + "/", timeout=2).status_code == 404
     finally:
         server.shutdown()
@@ -83,6 +92,31 @@ def test_cycle_health_tracks_success_errors_staleness_and_disabled_polling():
     status, payload = disabled.response()
     assert status == 503
     assert payload["checks"] == {"polling": "disabled", "cycle": "disabled"}
+
+
+def test_click_drop_health_tracks_success_errors_staleness_and_disabled_state():
+    now = [0]
+    health = ClickDropHealth(60, True, clock=lambda: now[0])
+    assert health.response()[1]["checks"] == {"click_and_drop": "starting"}
+
+    health.check_started()
+    assert health.response()[1]["checks"] == {"click_and_drop": "checking"}
+    health.check_succeeded()
+    assert health.response()[0] == 200
+
+    now[0] = 181
+    assert health.response()[1]["checks"] == {"click_and_drop": "stale"}
+
+    error = PollHTTPError("Royal Mail returned HTTP 401", status_code=401)
+    health.check_started()
+    health.check_failed(error)
+    status, payload = health.response()
+    assert status == 503
+    assert payload["checks"] == {"click_and_drop": "error"}
+    assert payload["last_http_status"] == 401
+
+    disabled = ClickDropHealth(60, False)
+    assert disabled.response()[1]["checks"] == {"click_and_drop": "disabled"}
 
 
 @pytest.mark.parametrize("raw", [rm_order(), rm_order(printedOn="2026-11-23T12:00:00Z"),
@@ -177,6 +211,29 @@ def test_lookup_batches_use_quoted_encoded_references_and_existing_auth(monkeypa
     assert args[0] == 'https://api.parcel.royalmail.com/api/v1/orders/"AW-1";"ref%3B%20%2Fspecial"'
     assert kwargs["headers"] == {"Authorization": "secret"}
     assert kwargs["allow_redirects"] is False
+
+
+def test_connectivity_uses_authenticated_read_only_carrier_lookup(monkeypatch):
+    get = Mock(return_value=Mock(status_code=200, json=lambda: []))
+    monkeypatch.setattr(requests, "get", get)
+    assert RoyalMailReader(
+        "https://api.parcel.royalmail.com/api/v1/", "secret"
+    ).connectivity() == []
+    assert get.call_args.args == (
+        "https://api.parcel.royalmail.com/api/v1/carriers",
+    )
+    assert get.call_args.kwargs["headers"] == {"Authorization": "secret"}
+    assert get.call_args.kwargs["allow_redirects"] is False
+
+
+def test_connectivity_rejects_unexpected_response_shape(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "get",
+        Mock(return_value=Mock(status_code=200, json=lambda: {"carriers": []})),
+    )
+    with pytest.raises(PollHTTPError, match="carrier array"):
+        RoyalMailReader("https://example.com", "secret").connectivity()
 
 
 @pytest.mark.parametrize("size", [0, 101])
@@ -329,6 +386,7 @@ def test_polling_switch_preserves_inbox_delivery(monkeypatch, active, manual, re
     assert poller.main(["--once", "--apply", "--trigger", "shipped-on"] +
                        (["--manual-only"] if manual else [])) == 0
     assert reader.called == reads
+    assert reader.return_value.connectivity.called == reads
     assert store.discover.called == reads
     dispatcher.send.assert_called_once()
     assert store.event_result.call_args.args[1] == "delivered"

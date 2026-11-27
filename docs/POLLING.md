@@ -74,6 +74,23 @@ for the last cycle start, completion, and success, the cycle age, and the last
 cycle's error count. A cycle with no due orders is a successful completed
 cycle. No order or customer details are exposed.
 
+`GET /health/click-and-drop` reports the cached result of a separate,
+authenticated, read-only Click & Drop connectivity check. Once per polling
+cycle the worker calls `GET /carriers`, validates the returned JSON shape, and
+caches only the result, time, and HTTP status; it does not retain or expose the
+carrier response. Royal Mail documents this as an account-authenticated read
+operation, so the check creates, changes, dispatches, and deletes nothing.
+
+```sh
+curl --fail-with-body http://rm-click-drop.home:8002/health/click-and-drop
+```
+
+The endpoint returns HTTP 200 while the most recent check succeeded and is no
+older than the same freshness limit used by the polling-cycle check. It returns
+HTTP 503 while starting, after an error, when stale, or when Click & Drop
+polling is disabled. Kuma requests only the cached local result and therefore
+do not generate extra Click & Drop traffic.
+
 Medusa credentials remain on the exporter API side. The worker itself posts
 to the existing bridge; it does not reimplement shipment creation.
 

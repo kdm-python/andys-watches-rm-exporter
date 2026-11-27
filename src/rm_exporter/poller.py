@@ -120,6 +120,81 @@ class PollerCycleHealth:
             }
 
 
+class ClickDropHealth:
+    """Thread-safe cached result of the poller's active Click & Drop check."""
+
+    def __init__(self, interval, enabled, *, clock=monotonic):
+        self.interval = interval
+        self.enabled = enabled
+        self.freshness_limit = max(interval * 3, interval + 30)
+        self.clock = clock
+        self.lock = Lock()
+        self.checking = False
+        self.last_checked_at = None
+        self.last_checked_clock = None
+        self.last_successful_at = None
+        self.last_http_status = None
+        self.last_error = None
+
+    @staticmethod
+    def timestamp():
+        return datetime.now(timezone.utc).isoformat()
+
+    def check_started(self):
+        with self.lock:
+            self.checking = True
+
+    def check_succeeded(self):
+        with self.lock:
+            checked_at = self.timestamp()
+            checked_clock = self.clock()
+            self.checking = False
+            self.last_checked_at = checked_at
+            self.last_checked_clock = checked_clock
+            self.last_successful_at = checked_at
+            self.last_http_status = 200
+            self.last_error = None
+
+    def check_failed(self, error):
+        with self.lock:
+            self.checking = False
+            self.last_checked_at = self.timestamp()
+            self.last_checked_clock = self.clock()
+            self.last_http_status = error.status_code
+            self.last_error = str(error)
+
+    def response(self):
+        with self.lock:
+            age = (
+                None
+                if self.last_checked_clock is None
+                else max(0, int(self.clock() - self.last_checked_clock))
+            )
+            if not self.enabled:
+                state = "disabled"
+            elif self.last_checked_clock is None:
+                state = "checking" if self.checking else "starting"
+            elif age > self.freshness_limit:
+                state = "stale"
+            elif self.last_error is not None:
+                state = "error"
+            else:
+                state = "ok"
+            healthy = self.enabled and state == "ok"
+            return (200 if healthy else 503), {
+                "status": "ok" if healthy else "error",
+                "service": "royal-mail-poller",
+                "checks": {"click_and_drop": state},
+                "interval_seconds": self.interval,
+                "freshness_limit_seconds": self.freshness_limit,
+                "last_checked_at": self.last_checked_at,
+                "last_successful_at": self.last_successful_at,
+                "last_check_age_seconds": age,
+                "last_http_status": self.last_http_status,
+                "last_error": self.last_error,
+            }
+
+
 class PollerLivenessHandler(BaseHTTPRequestHandler):
     """Minimal HTTP surface owned by the poller process itself."""
 
@@ -131,6 +206,12 @@ class PollerLivenessHandler(BaseHTTPRequestHandler):
             content_type = "application/json"
         elif path == "/health/ready" and hasattr(self.server, "cycle_health"):
             status, payload = self.server.cycle_health.response()
+            body = json.dumps(payload, separators=(",", ":")).encode()
+            content_type = "application/json"
+        elif path == "/health/click-and-drop" and hasattr(
+            self.server, "click_drop_health"
+        ):
+            status, payload = self.server.click_drop_health.response()
             body = json.dumps(payload, separators=(",", ":")).encode()
             content_type = "application/json"
         else:
@@ -155,10 +236,12 @@ class PollerLivenessHandler(BaseHTTPRequestHandler):
         return
 
 
-def start_liveness_server(host, port, cycle_health=None):
+def start_liveness_server(host, port, cycle_health=None, click_drop_health=None):
     server = ThreadingHTTPServer((host, port), PollerLivenessHandler)
     if cycle_health is not None:
         server.cycle_health = cycle_health
+    if click_drop_health is not None:
+        server.click_drop_health = click_drop_health
     Thread(target=server.serve_forever, name="poller-liveness", daemon=True).start()
     logger.info("Poller liveness listening on {}:{}", host, server.server_port)
     return server
@@ -407,6 +490,10 @@ def main(argv=None):
         args.interval,
         polling_active and not args.manual_only,
     )
+    click_drop_health = ClickDropHealth(
+        args.interval,
+        polling_active and not args.manual_only,
+    )
     stop = Event()
     health_server = None
     previous_handlers = {}
@@ -452,10 +539,18 @@ def main(argv=None):
             except ValueError:
                 parser.error("POLLER_HEALTH_PORT must be between 1 and 65535")
             health_server = start_liveness_server(
-                health_host, health_port, cycle_health
+                health_host, health_port, cycle_health, click_drop_health
             )
         while not stop.is_set():
             cycle_health.cycle_started()
+            if reader is not None:
+                click_drop_health.check_started()
+                try:
+                    reader.connectivity()
+                    click_drop_health.check_succeeded()
+                except PollHTTPError as exc:
+                    click_drop_health.check_failed(exc)
+                    logger.warning("Click & Drop connectivity check failed: {}", exc)
             try:
                 with polling_store(worker=True) as store:
                     if args.retry_event:
