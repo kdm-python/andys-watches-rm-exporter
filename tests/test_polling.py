@@ -5,7 +5,7 @@ import pytest
 import requests
 
 from rm_exporter import poller
-from rm_exporter.poller import ExporterDispatcher, run_cycle
+from rm_exporter.poller import ExporterDispatcher, run_cycle, start_liveness_server
 from rm_exporter.royal_mail_polling import (
     PollHTTPError, RoyalMailReader, classify, dispatch_payload, observation,
 )
@@ -20,6 +20,22 @@ def watch(**changes):
     return {"medusa_order_id": "order_123", "royal_mail_reference": "AW-1001",
             "first_observed_at": None, "baseline_shipped_on": None, "failures": 0,
             "observation": None, **changes}
+
+
+def test_poller_liveness_is_owned_by_the_poller_process():
+    server = start_liveness_server("127.0.0.1", 0)
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        response = requests.get(base + "/health/live", timeout=2)
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "ok",
+            "service": "royal-mail-poller",
+        }
+        assert requests.get(base + "/", timeout=2).status_code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 @pytest.mark.parametrize("raw", [rm_order(), rm_order(printedOn="2026-11-23T12:00:00Z"),

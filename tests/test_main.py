@@ -29,8 +29,8 @@ class MainTests(unittest.TestCase):
         send_order_click_and_drop.assert_not_called()
         transform_order.assert_called_once_with(
             get_orders.return_value[0],
-            package_weight_in_grams=350,
-            package_format_identifier="smallParcel",
+            package_weight_in_grams=100,
+            package_format_identifier="largeLetter",
         )
         to_payload.assert_called_once_with(transform_order.return_value)
 

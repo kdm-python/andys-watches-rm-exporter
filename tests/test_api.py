@@ -48,7 +48,15 @@ def medusa_order() -> MedusaOrder:
     )
 
 
-def test_healthcheck(client: TestClient):
+def test_healthcheck():
+    client = TestClient(api.app)
+
+    response = client.get("/health/live")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "service": "royal-mail-exporter",
+    }
     assert client.get("/").json() == {"status": "ok"}
 
 
@@ -72,7 +80,7 @@ def test_orders_transforms_and_records_new_order(
     monkeypatch.setattr(api, "get_order", Mock(return_value=medusa_order))
     monkeypatch.setattr(api, "transform_order", Mock(return_value=royal_mail_order))
     monkeypatch.setattr(api, "to_payload", Mock(return_value={"items": []}))
-    send_order = Mock(return_value={"orderIdentifier": "rm_1"})
+    send_order = Mock(return_value={"successCount": 1, "errorsCount": 0, "createdOrders": [{"orderIdentifier": 1, "orderReference": "AW-1001"}], "failedOrders": []})
     monkeypatch.setattr(api, "send_order_click_and_drop", send_order)
 
     response = client.post(
@@ -87,7 +95,7 @@ def test_orders_transforms_and_records_new_order(
         "status": "sent",
         "royal_mail_payload": {"items": []},
         "posted_to_royal_mail": True,
-        "royal_mail_response": {"orderIdentifier": "rm_1"},
+        "royal_mail_response": {"successCount": 1, "errorsCount": 0, "createdOrders": [{"orderIdentifier": 1, "orderReference": "AW-1001"}], "failedOrders": []},
     }
     stored_order = db.select_order("medusa_1")
     assert stored_order["royal_mail_reference"] == "AW-1001"
@@ -105,7 +113,7 @@ def test_orders_retries_a_pending_order(
     monkeypatch.setattr(api, "get_order", Mock(return_value=medusa_order))
     monkeypatch.setattr(api, "transform_order", Mock(return_value=royal_mail_order))
     monkeypatch.setattr(api, "to_payload", Mock(return_value={"items": []}))
-    send_order = Mock(return_value={"orderIdentifier": "rm_1"})
+    send_order = Mock(return_value={"successCount": 1, "errorsCount": 0, "createdOrders": [{"orderIdentifier": 1, "orderReference": "AW-1001"}], "failedOrders": []})
     monkeypatch.setattr(api, "send_order_click_and_drop", send_order)
 
     response = client.post(

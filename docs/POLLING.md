@@ -1,7 +1,7 @@
 # Polling worker and local tests
 
 The polling code lives in this repository and runs as a **separate foreground
-process** from FastAPI. No deployment scripts or systemd units are changed.
+process** from FastAPI.
 The eventual LXC service can run the same `rm-poller` command with an
 EnvironmentFile, a working directory, and systemd restart/logging settings.
 
@@ -14,8 +14,8 @@ The complete path is:
 3. That endpoint creates/reuses the Medusa fulfillment and creates its
    shipment. The existing Medusa worker sends the dispatch email.
 
-Receiving an inbox event does not itself change Medusa. There is no second
-HTTP server: the inbox/status routes belong to the existing exporter API.
+Receiving an inbox event does not itself change Medusa. The poller owns a small
+liveness listener; inbox/status routes still belong to the exporter API.
 
 ## Installation and configuration
 
@@ -43,6 +43,19 @@ already set by the shell/systemd take precedence. Configuration:
 | `RM_EXPORTER_BASE_URL` | Internal API destination, e.g. `http://127.0.0.1:8001` locally. Defaults to loopback and `PORT` (or 8001). Set this explicitly for the later LXC service. |
 | `DISPATCH_API_KEY` / `INTEGRATION_API_KEY` | Dispatch key takes precedence; same key used by the existing dispatch endpoint. Required with `--apply`. |
 | `ROYAL_MAIL_BASE_URL` / `ROYAL_MAIL_API_KEY` | Existing public Click & Drop API configuration. Not needed with `--manual-only`. |
+| `POLLER_HEALTH_HOST` | Liveness listener address. Defaults to `0.0.0.0`. |
+| `POLLER_HEALTH_PORT` | Liveness listener port. Defaults to `8002`. |
+
+While the continuous poller process is running, `GET /health/live` on that
+listener returns HTTP 200 with
+`{"status":"ok","service":"royal-mail-poller"}`. For example:
+
+```sh
+curl --fail-with-body http://rm-click-drop.home:8002/health/live
+```
+
+This only proves that the poller process is running and accepting requests. It
+does not prove that a polling cycle or Click & Drop request succeeded.
 
 Medusa credentials remain on the exporter API side. The worker itself posts
 to the existing bridge; it does not reimplement shipment creation.

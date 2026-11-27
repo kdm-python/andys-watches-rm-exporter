@@ -23,6 +23,21 @@ be able to create and access tables:
 uv run uvicorn rm_exporter.api:app --reload
 ```
 
+The unauthenticated `GET /health/live` endpoint is the exporter liveness
+contract for Uptime Kuma and deployment checks. It returns HTTP 200 with:
+
+```json
+{"status":"ok","service":"royal-mail-exporter"}
+```
+
+It only establishes that the exporter HTTP process is accepting requests. It
+does not test PostgreSQL, Medusa, the polling worker, or Royal Mail Click & Drop.
+Test it locally or from the Kuma host with:
+
+```sh
+curl --fail-with-body http://rm-click-drop.home:8000/health/live
+```
+
 `POST /orders` requires an `X-Integration-Key` header. It fetches and
 transforms a Medusa order, stores it as `pending` in the PostgreSQL
 `royal_mail_exporter` table, then

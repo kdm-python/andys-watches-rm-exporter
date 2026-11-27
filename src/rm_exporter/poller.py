@@ -5,7 +5,9 @@ import json
 import os
 import signal
 from collections import deque
-from threading import Event
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Event, Thread
+from urllib.parse import urlsplit
 
 import psycopg2
 import requests
@@ -28,6 +30,42 @@ from rm_exporter.royal_mail_polling import (
     observation,
     retry_after,
 )
+
+
+class PollerLivenessHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP surface owned by the poller process itself."""
+
+    def send_liveness_response(self, include_body=True):
+        if urlsplit(self.path).path != "/health/live":
+            body = b"Not found\n"
+            self.send_response(404)
+            content_type = "text/plain; charset=utf-8"
+        else:
+            body = b'{"status":"ok","service":"royal-mail-poller"}'
+            self.send_response(200)
+            content_type = "application/json"
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if include_body:
+            self.wfile.write(body)
+
+    def do_GET(self):
+        self.send_liveness_response()
+
+    def do_HEAD(self):
+        self.send_liveness_response(include_body=False)
+
+    def log_message(self, _format, *_args):
+        return
+
+
+def start_liveness_server(host, port):
+    server = ThreadingHTTPServer((host, port), PollerLivenessHandler)
+    Thread(target=server.serve_forever, name="poller-liveness", daemon=True).start()
+    logger.info("Poller liveness listening on {}:{}", host, server.server_port)
+    return server
 
 
 def backoff(attempts):
@@ -270,6 +308,7 @@ def main(argv=None):
         parser.error("POLLING_ACTIVE must be true or false")
     polling_active = polling_value == "true"
     stop = Event()
+    health_server = None
     previous_handlers = {}
     for sig in (signal.SIGTERM, signal.SIGINT):
         previous_handlers[sig] = signal.signal(sig, lambda *_: stop.set())
@@ -304,6 +343,15 @@ def main(argv=None):
             dispatcher = ExporterDispatcher(base, key)
         init_db()
         init_polling_db()
+        if not args.once and not args.retry_event:
+            health_host = os.getenv("POLLER_HEALTH_HOST", "0.0.0.0")
+            try:
+                health_port = int(os.getenv("POLLER_HEALTH_PORT", "8002"))
+                if not 1 <= health_port <= 65535:
+                    raise ValueError
+            except ValueError:
+                parser.error("POLLER_HEALTH_PORT must be between 1 and 65535")
+            health_server = start_liveness_server(health_host, health_port)
         while not stop.is_set():
             try:
                 with polling_store(worker=True) as store:
@@ -348,6 +396,9 @@ def main(argv=None):
         logger.error("Could not initialize polling database")
         return 1
     finally:
+        if health_server is not None:
+            health_server.shutdown()
+            health_server.server_close()
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
     return 0

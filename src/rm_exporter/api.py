@@ -1,7 +1,7 @@
 import json
 import os
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 import psycopg2
@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel
 
-from rm_exporter.db import create_order, init_db, select_order, update_order_status
+from rm_exporter.db import create_order, get_connection, init_db, select_order, update_order_status
 from rm_exporter.dispatch import DispatchError, MedusaDispatchClient, dispatch_order
 from rm_exporter.dispatch_schema import DispatchRequest
 from rm_exporter.dispatch_store import DispatchBusy, locked_dispatch
@@ -143,6 +143,12 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/health/live")
+def liveness():
+    """Report that the exporter HTTP process is running and accepting requests."""
+    return {"status": "ok", "service": "royal-mail-exporter"}
+
+
 @app.post("/orders")
 def receive_order(
     request: OrderRequest,
@@ -158,7 +164,25 @@ def receive_order(
             detail="Unauthorized",
         )
 
-    order_id = request.order_id
+    # Both Medusa events can arrive together. Hold a database session lock
+    # through the Royal Mail request so the second event observes the sent row.
+    with closing(get_connection()) as lock_conn:
+        with lock_conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+                (f"rm-exporter:export:{request.order_id}",),
+            )
+        try:
+            return _export_order(request.order_id)
+        finally:
+            with lock_conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                    (f"rm-exporter:export:{request.order_id}",),
+                )
+
+
+def _export_order(order_id: str):
     logger.info(f"Received order {order_id}")
 
     # 2. Do not submit an order that Royal Mail has already accepted. Pending and

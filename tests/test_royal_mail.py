@@ -23,6 +23,7 @@ class RoyalMailPayloadTests(unittest.TestCase):
             subtotal=26.79,
             shipping_total=5.00,
             total=31.79,
+            shipping_method="Royal Mail Tracked 48",
             shipping_address=MedusaAddress(
                 first_name="Ada",
                 last_name="Lovelace",
@@ -39,6 +40,7 @@ class RoyalMailPayloadTests(unittest.TestCase):
             items=[
                 MedusaItem(
                     title="Oil Set Complete",
+                    subtitle="0.5 / yes",
                     variant_title="0.5 / yes",
                     sku=None,
                     quantity=1,
@@ -46,6 +48,7 @@ class RoyalMailPayloadTests(unittest.TestCase):
                 ),
                 MedusaItem(
                     title="Oil Refill",
+                    subtitle=None,
                     variant_title=None,
                     sku="OIL-REFILL",
                     quantity=2,
@@ -72,14 +75,16 @@ class RoyalMailPayloadTests(unittest.TestCase):
                     "packageFormatIdentifier": "smallParcel",
                     "contents": [
                         {
-                            "name": "Oil Set Complete",
+                            "name": "Oil Set Complete - 0.5ml - With Oilers",
                             "quantity": 1,
+                            "unitWeightInGrams": 100,
                             "unitValue": 26.79,
                         },
                         {
                             "name": "Oil Refill",
                             "SKU": "OIL-REFILL",
                             "quantity": 2,
+                            "unitWeightInGrams": 100,
                             "unitValue": 5.00,
                         },
                     ]
@@ -96,6 +101,7 @@ class RoyalMailPayloadTests(unittest.TestCase):
             subtotal=26.79,
             shipping_total=5.00,
             total=31.79,
+            shipping_method="Royal Mail Tracked 48",
             shipping_address=MedusaAddress(
                 first_name="Ada",
                 last_name="Lovelace",
@@ -122,9 +128,9 @@ class RoyalMailPayloadTests(unittest.TestCase):
     @patch("rm_exporter.royal_mail.requests.post")
     def test_sends_to_click_and_drop_with_expected_request(self, post, to_payload):
         response = Mock(ok=True)
-        response.json.return_value = {"orderIdentifier": "rm_1"}
+        response.json.return_value = {"successCount": 1, "errorsCount": 0, "createdOrders": [{"orderIdentifier": "rm_1", "orderReference": "AW-1"}], "failedOrders": []}
         post.return_value = response
-        order = Mock()
+        order = Mock(order_reference="AW-1")
 
         result = send_order_click_and_drop(
             "https://royal-mail.example/api/v1/",
@@ -132,7 +138,7 @@ class RoyalMailPayloadTests(unittest.TestCase):
             order,
         )
 
-        self.assertEqual(result, {"orderIdentifier": "rm_1"})
+        self.assertEqual(result["successCount"], 1)
         post.assert_called_once_with(
             "https://royal-mail.example/api/v1/Orders",
             headers={
@@ -144,3 +150,19 @@ class RoyalMailPayloadTests(unittest.TestCase):
         )
         to_payload.assert_called_once_with(order)
         response.raise_for_status.assert_called_once_with()
+
+    @patch("rm_exporter.royal_mail.to_payload", return_value={"items": []})
+    @patch("rm_exporter.royal_mail.requests.post")
+    def test_rejected_order_in_http_200_is_not_success(self, post, to_payload):
+        import requests
+
+        response = Mock(ok=True)
+        response.json.return_value = {
+            "successCount": 0,
+            "errorsCount": 1,
+            "createdOrders": [],
+            "failedOrders": [{"orderReference": "AW-1"}],
+        }
+        post.return_value = response
+        with self.assertRaises(requests.HTTPError):
+            send_order_click_and_drop("https://royal-mail.example/api/v1", "key", Mock(order_reference="AW-1"))

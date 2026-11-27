@@ -195,4 +195,23 @@ def send_order_click_and_drop(
         logger.error(response.text)
 
     response.raise_for_status()
-    return response.json()
+    result = response.json()
+    created = result.get("createdOrders", []) if isinstance(result, dict) else []
+    if (
+        not isinstance(created, list)
+        or len(created) != 1
+        or not isinstance(created[0], dict)
+        or created[0].get("orderReference") != order.order_reference
+        or not created[0].get("orderIdentifier")
+        or result.get("successCount") != 1
+        or result.get("errorsCount") != 0
+    ):
+        logger.error(
+            "Royal Mail did not confirm creation of order {}: {}",
+            order.order_reference,
+            result,
+        )
+        raise requests.HTTPError(
+            f"Royal Mail did not confirm creation of order {order.order_reference}"
+        )
+    return result
