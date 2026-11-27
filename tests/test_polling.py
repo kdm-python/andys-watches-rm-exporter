@@ -5,7 +5,12 @@ import pytest
 import requests
 
 from rm_exporter import poller
-from rm_exporter.poller import ExporterDispatcher, run_cycle, start_liveness_server
+from rm_exporter.poller import (
+    ExporterDispatcher,
+    PollerCycleHealth,
+    run_cycle,
+    start_liveness_server,
+)
 from rm_exporter.royal_mail_polling import (
     PollHTTPError, RoyalMailReader, classify, dispatch_payload, observation,
 )
@@ -23,7 +28,8 @@ def watch(**changes):
 
 
 def test_poller_liveness_is_owned_by_the_poller_process():
-    server = start_liveness_server("127.0.0.1", 0)
+    cycle_health = PollerCycleHealth(60, True)
+    server = start_liveness_server("127.0.0.1", 0, cycle_health)
     try:
         base = f"http://127.0.0.1:{server.server_port}"
         response = requests.get(base + "/health/live", timeout=2)
@@ -32,10 +38,51 @@ def test_poller_liveness_is_owned_by_the_poller_process():
             "status": "ok",
             "service": "royal-mail-poller",
         }
+        assert requests.get(base + "/health/ready", timeout=2).status_code == 503
+        cycle_health.cycle_started()
+        cycle_health.cycle_completed({"errors": 0})
+        ready = requests.get(base + "/health/ready", timeout=2)
+        assert ready.status_code == 200
+        assert ready.json()["checks"] == {"polling": "ok", "cycle": "ok"}
         assert requests.get(base + "/", timeout=2).status_code == 404
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_cycle_health_tracks_success_errors_staleness_and_disabled_polling():
+    now = [0]
+    health = PollerCycleHealth(60, True, clock=lambda: now[0])
+    assert health.response()[1]["checks"]["cycle"] == "starting"
+
+    health.cycle_started()
+    now[0] = 181
+    assert health.response()[1]["checks"]["cycle"] == "stale"
+
+    now[0] = 200
+    health.cycle_started()
+    health.cycle_completed({"errors": 0})
+    status, payload = health.response()
+    assert status == 200
+    assert payload["last_successful_cycle_at"] is not None
+    assert payload["last_cycle_error_count"] == 0
+
+    now[0] = 381
+    status, payload = health.response()
+    assert status == 503
+    assert payload["checks"]["cycle"] == "stale"
+
+    health.cycle_started()
+    health.cycle_completed({"errors": 2})
+    status, payload = health.response()
+    assert status == 503
+    assert payload["checks"]["cycle"] == "error"
+    assert payload["last_cycle_error_count"] == 2
+
+    disabled = PollerCycleHealth(60, False)
+    status, payload = disabled.response()
+    assert status == 503
+    assert payload["checks"] == {"polling": "disabled", "cycle": "disabled"}
 
 
 @pytest.mark.parametrize("raw", [rm_order(), rm_order(printedOn="2026-11-23T12:00:00Z"),
@@ -219,9 +266,13 @@ def test_worker_does_not_need_royal_mail_credentials_for_manual_mode(monkeypatch
     from contextlib import contextmanager
     store = Mock()
     store.due_events.return_value = []
+    cycle_health = Mock()
     @contextmanager
     def memory_store(**_): yield store
     monkeypatch.setattr(poller, "polling_store", memory_store)
+    monkeypatch.setattr(
+        poller, "PollerCycleHealth", Mock(return_value=cycle_health)
+    )
     monkeypatch.setattr(poller, "init_db", Mock())
     monkeypatch.setattr(poller, "init_polling_db", Mock())
     monkeypatch.setattr(poller, "load_dotenv", Mock())
@@ -229,6 +280,10 @@ def test_worker_does_not_need_royal_mail_credentials_for_manual_mode(monkeypatch
     monkeypatch.delenv("ROYAL_MAIL_BASE_URL", raising=False)
     assert poller.main(["--once", "--manual-only"]) == 0
     store.discover.assert_not_called()
+    cycle_health.cycle_started.assert_called_once_with()
+    cycle_health.cycle_completed.assert_called_once()
+    completed_counts = cycle_health.cycle_completed.call_args.args[0]
+    assert completed_counts["errors"] == 0
 
 
 def test_stop_signal_finishes_without_dispatching():

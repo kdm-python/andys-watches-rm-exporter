@@ -5,8 +5,10 @@ import json
 import os
 import signal
 from collections import deque
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Event, Thread
+from threading import Event, Lock, Thread
+from time import monotonic
 from urllib.parse import urlsplit
 
 import psycopg2
@@ -32,18 +34,110 @@ from rm_exporter.royal_mail_polling import (
 )
 
 
+class PollerCycleHealth:
+    """Thread-safe progress state shared with the poller's health listener."""
+
+    def __init__(self, interval, polling_enabled, *, clock=monotonic):
+        self.interval = interval
+        self.polling_enabled = polling_enabled
+        self.freshness_limit = max(interval * 3, interval + 30)
+        self.clock = clock
+        self.lock = Lock()
+        self.last_started_at = None
+        self.last_started_clock = None
+        self.last_completed_at = None
+        self.last_completed_clock = None
+        self.last_successful_at = None
+        self.last_error_count = None
+
+    @staticmethod
+    def timestamp():
+        return datetime.now(timezone.utc).isoformat()
+
+    def cycle_started(self):
+        with self.lock:
+            self.last_started_at = self.timestamp()
+            self.last_started_clock = self.clock()
+
+    def cycle_completed(self, counts):
+        errors = int(counts.get("errors", 0))
+        with self.lock:
+            completed_at = self.timestamp()
+            self.last_completed_at = completed_at
+            self.last_completed_clock = self.clock()
+            self.last_error_count = errors
+            if errors == 0:
+                self.last_successful_at = completed_at
+
+    def cycle_failed(self):
+        self.cycle_completed({"errors": 1})
+
+    def response(self):
+        with self.lock:
+            now = self.clock()
+            started_age = (
+                None
+                if self.last_started_clock is None
+                else max(0, int(now - self.last_started_clock))
+            )
+            completed_clock = self.last_completed_clock
+            age = (
+                None
+                if completed_clock is None
+                else max(0, int(now - completed_clock))
+            )
+            if not self.polling_enabled:
+                cycle = "disabled"
+            elif completed_clock is None:
+                cycle = (
+                    "stale"
+                    if started_age is not None
+                    and started_age > self.freshness_limit
+                    else "starting"
+                )
+            elif age > self.freshness_limit:
+                cycle = "stale"
+            elif self.last_error_count:
+                cycle = "error"
+            else:
+                cycle = "ok"
+            healthy = self.polling_enabled and cycle == "ok"
+            return (200 if healthy else 503), {
+                "status": "ok" if healthy else "error",
+                "service": "royal-mail-poller",
+                "checks": {
+                    "polling": "ok" if self.polling_enabled else "disabled",
+                    "cycle": cycle,
+                },
+                "interval_seconds": self.interval,
+                "freshness_limit_seconds": self.freshness_limit,
+                "last_cycle_started_at": self.last_started_at,
+                "last_cycle_completed_at": self.last_completed_at,
+                "last_successful_cycle_at": self.last_successful_at,
+                "current_cycle_age_seconds": started_age,
+                "last_cycle_age_seconds": age,
+                "last_cycle_error_count": self.last_error_count,
+            }
+
+
 class PollerLivenessHandler(BaseHTTPRequestHandler):
     """Minimal HTTP surface owned by the poller process itself."""
 
-    def send_liveness_response(self, include_body=True):
-        if urlsplit(self.path).path != "/health/live":
-            body = b"Not found\n"
-            self.send_response(404)
-            content_type = "text/plain; charset=utf-8"
-        else:
+    def send_health_response(self, include_body=True):
+        path = urlsplit(self.path).path
+        if path == "/health/live":
+            status = 200
             body = b'{"status":"ok","service":"royal-mail-poller"}'
-            self.send_response(200)
             content_type = "application/json"
+        elif path == "/health/ready" and hasattr(self.server, "cycle_health"):
+            status, payload = self.server.cycle_health.response()
+            body = json.dumps(payload, separators=(",", ":")).encode()
+            content_type = "application/json"
+        else:
+            status = 404
+            body = b"Not found\n"
+            content_type = "text/plain; charset=utf-8"
+        self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
@@ -52,17 +146,19 @@ class PollerLivenessHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_GET(self):
-        self.send_liveness_response()
+        self.send_health_response()
 
     def do_HEAD(self):
-        self.send_liveness_response(include_body=False)
+        self.send_health_response(include_body=False)
 
     def log_message(self, _format, *_args):
         return
 
 
-def start_liveness_server(host, port):
+def start_liveness_server(host, port, cycle_health=None):
     server = ThreadingHTTPServer((host, port), PollerLivenessHandler)
+    if cycle_health is not None:
+        server.cycle_health = cycle_health
     Thread(target=server.serve_forever, name="poller-liveness", daemon=True).start()
     logger.info("Poller liveness listening on {}:{}", host, server.server_port)
     return server
@@ -307,6 +403,10 @@ def main(argv=None):
     if polling_value not in ("true", "false"):
         parser.error("POLLING_ACTIVE must be true or false")
     polling_active = polling_value == "true"
+    cycle_health = PollerCycleHealth(
+        args.interval,
+        polling_active and not args.manual_only,
+    )
     stop = Event()
     health_server = None
     previous_handlers = {}
@@ -351,8 +451,11 @@ def main(argv=None):
                     raise ValueError
             except ValueError:
                 parser.error("POLLER_HEALTH_PORT must be between 1 and 65535")
-            health_server = start_liveness_server(health_host, health_port)
+            health_server = start_liveness_server(
+                health_host, health_port, cycle_health
+            )
         while not stop.is_set():
+            cycle_health.cycle_started()
             try:
                 with polling_store(worker=True) as store:
                     if args.retry_event:
@@ -370,6 +473,7 @@ def main(argv=None):
                         stop=stop,
                     )
                     print(json.dumps(counts), flush=True)
+                cycle_health.cycle_completed(counts)
                 if args.once:
                     return (
                         1
@@ -377,12 +481,14 @@ def main(argv=None):
                         else 0
                     )
             except PollerBusy:
+                cycle_health.cycle_failed()
                 logger.warning(
                     "Another polling worker owns this cycle; no requests sent"
                 )
                 if args.once or args.retry_event:
                     return 1
             except psycopg2.Error:
+                cycle_health.cycle_failed()
                 logger.error("Polling database unavailable; no progress assumed")
                 if args.once or args.retry_event:
                     return 1

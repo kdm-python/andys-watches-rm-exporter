@@ -57,6 +57,23 @@ curl --fail-with-body http://rm-click-drop.home:8002/health/live
 This only proves that the poller process is running and accepting requests. It
 does not prove that a polling cycle or Click & Drop request succeeded.
 
+`GET /health/ready` on the same listener reports polling-cycle freshness. It
+returns HTTP 200 only when polling is enabled, the latest cycle completed
+without Royal Mail observation errors, and that completion is no older than
+three configured polling intervals (with a minimum allowance of the interval
+plus 30 seconds). It returns HTTP 503 while starting, when polling is disabled,
+after a cycle with errors, or when the last completion is stale.
+An initial cycle that starts but never completes also becomes stale.
+
+```sh
+curl --fail-with-body http://rm-click-drop.home:8002/health/ready
+```
+
+The response includes the configured interval and freshness limit, UTC times
+for the last cycle start, completion, and success, the cycle age, and the last
+cycle's error count. A cycle with no due orders is a successful completed
+cycle. No order or customer details are exposed.
+
 Medusa credentials remain on the exporter API side. The worker itself posts
 to the existing bridge; it does not reimplement shipment creation.
 

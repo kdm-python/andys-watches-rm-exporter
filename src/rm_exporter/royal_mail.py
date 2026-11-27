@@ -13,9 +13,6 @@ from rm_exporter.models import (
     RoyalMailRecipient,
 )
 
-# https://help.parcel.royalmail.com/hc/en-gb/articles/360000935633-Royal-Mail-service-codes-Online-Business-Customers
-
-
 load_dotenv()
 
 SERVICE_CODES = {

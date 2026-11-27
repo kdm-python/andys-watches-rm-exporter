@@ -12,7 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel
 
-from rm_exporter.db import create_order, get_connection, init_db, select_order, update_order_status
+from rm_exporter.db import (
+    create_order,
+    get_connection,
+    init_db,
+    select_order,
+    update_order_status,
+)
 from rm_exporter.dispatch import DispatchError, MedusaDispatchClient, dispatch_order
 from rm_exporter.dispatch_schema import DispatchRequest
 from rm_exporter.dispatch_store import DispatchBusy, locked_dispatch

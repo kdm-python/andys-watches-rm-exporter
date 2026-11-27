@@ -21,8 +21,8 @@ class MedusaError(DispatchError):
         super().__init__(status_code, detail)
 
 
-DISPATCH_FIELDS = ",".join(
-    [  # noqa: FLY002
+DISPATCH_FIELDS = ",".join(  # noqa: FLY002
+    [
         "+payment_status",
         "+fulfillment_status",
         "+items.*",
